@@ -20,6 +20,7 @@ exclude = ["packages/*/tests/typing/bad.py"]
 
 [tool.pyrefly]
 project-excludes = ["**/.venv/**", "packages/*/tests/typing/bad.py"]
+search-path = ["packages/honoka-cli/tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["packages"]

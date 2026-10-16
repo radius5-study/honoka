@@ -225,7 +225,7 @@ Implementation approach:
 
 ### 9.1 `honoka check` (framework-specific linter)
 
-Mechanically detects discrepancies between types and runtime behavior, and mistakes specific to the framework:
+Provided by the separate package `honoka-cli` (which installs the `honoka` command), so the core stays free of tooling. It mechanically detects discrepancies between types and runtime behavior, and mistakes specific to the framework:
 
 ```bash
 honoka check main.py
@@ -291,7 +291,8 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 ## 10. Package Layout
 
 ```
-honoka            … routing, Context, middleware execution, responses, honoka check
+honoka            … routing, Context, middleware execution, responses (no third-party dependencies)
+honoka-cli        … the `honoka` command: `honoka routes`, `honoka check`
 honoka-msgspec    … validator(), structured 400
 honoka-openapi    … schema collection, /openapi.json, Scalar serving
 honoka-<name>     … one package per official middleware (9.4): request-id, logger, timing, secure-headers, cors, csrf, body-limit, timeout, trailing-slash, ...

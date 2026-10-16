@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 members = [
     "honoka",
     "honoka-body-limit",
+    "honoka-cli",
     "honoka-cors",
     "honoka-csrf",
     "honoka-logger",
@@ -147,6 +148,17 @@ source = { editable = "packages/honoka" }
 name = "honoka-body-limit"
 version = "0.1.0"
 source = { editable = "packages/honoka-body-limit" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-cli"
+version = "0.1.0"
+source = { editable = "packages/honoka-cli" }
 dependencies = [
     { name = "honoka" },
 ]
