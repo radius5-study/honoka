@@ -37,18 +37,21 @@ class Context:
         self.req = req
         self.error: Exception | None = None
         self.route: str | None = None
-        self._store: dict[object, object] = {}
+        self._store: dict[object, object] | None = None
         self._provided = provided
         self._codec = codec
-        self.set_cookies: list[str] = []
+        self.set_cookies: list[str] | None = None
 
     def set[T](self, key: Key[T], value: T) -> None:
+        if self._store is None:
+            self._store = {}
         self._store[key] = value
 
     def get[T](self, key: Key[T]) -> T:
         """The value set on this request, else the app-wide value published with `provide`."""
-        if key in self._store:
-            return cast(T, self._store[key])
+        store = self._store
+        if store is not None and key in store:
+            return cast(T, store[key])
         if key in self._provided:
             return cast(T, self._provided[key])
         raise LookupError(f"key {key.name!r} was never set")
@@ -108,6 +111,8 @@ class Context:
             parts.append("HttpOnly")
         if same_site is not None:
             parts.append(f"SameSite={same_site}")
+        if self.set_cookies is None:
+            self.set_cookies = []
         self.set_cookies.append("; ".join(parts))
 
     def delete_cookie(self, name: str, *, path: str = "/", domain: str | None = None) -> None:

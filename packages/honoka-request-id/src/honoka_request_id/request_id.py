@@ -1,5 +1,5 @@
+import os
 import re
-import uuid
 
 from honoka import Context, Key, Middleware, Next, Response
 
@@ -14,7 +14,11 @@ def request_id(header: str = "x-request-id") -> Middleware:
 
     async def middleware(c: Context, call_next: Next) -> Response:
         incoming = c.req.header(header)
-        rid = incoming if incoming is not None and _VALID.fullmatch(incoming) else uuid.uuid4().hex
+        rid = (
+            incoming
+            if incoming is not None and _VALID.fullmatch(incoming)
+            else os.urandom(16).hex()
+        )
         c.set(REQUEST_ID, rid)
         response = await call_next()
         response.headers.append((header, rid))

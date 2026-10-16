@@ -4,6 +4,8 @@ from collections.abc import AsyncIterable
 
 from honoka.json import STDLIB_JSON, JsonCodec
 
+_JSON_TYPE = ("content-type", "application/json")
+
 
 class Response:
     __slots__ = ("body", "headers", "status")
@@ -32,8 +34,10 @@ class Json[T](Response):
         *,
         codec: JsonCodec = STDLIB_JSON,
     ) -> None:
-        content_type = ("content-type", "application/json")
-        super().__init__(codec.encode(data), status, [*(headers or []), content_type])
+        # Assigned directly: Response.__init__ would only add a call to every JSON response.
+        self.body = codec.encode(data)
+        self.status = status
+        self.headers = [_JSON_TYPE] if headers is None else [*headers, _JSON_TYPE]
         self._data = data
 
     @property

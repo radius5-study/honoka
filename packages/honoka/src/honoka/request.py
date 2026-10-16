@@ -28,10 +28,10 @@ class Request:
         self._proto = proto
         self._params = params
         self._codec = codec
-        self._query: list[tuple[str, str]] | None = None
+        self._query: dict[str, list[str]] | None = None
         self._cookies: dict[str, str] | None = None
         self._body: bytes | None = None
-        self._valid: dict[str, object] = {}
+        self._valid: dict[str, object] | None = None
         self._body_limit: int | None = None
 
     @property
@@ -88,14 +88,27 @@ class Request:
 
     def query(self, name: str) -> str | None:
         """The first value of the query parameter `name`."""
-        return next((v for k, v in self._query_items() if k == name), None)
+        values = self._query_map().get(name)
+        return None if values is None else values[0]
 
     def queries(self, name: str) -> list[str]:
-        return [v for k, v in self._query_items() if k == name]
+        return list(self._query_map().get(name, ()))
 
-    def _query_items(self) -> list[tuple[str, str]]:
+    def _query_map(self) -> dict[str, list[str]]:
+        """Every query parameter, grouped by name, parsed once per request."""
         if self._query is None:
-            self._query = parse_qsl(self._scope.query_string, keep_blank_values=True)
+            text = self._scope.query_string
+            grouped: dict[str, list[str]] = {}
+            if "%" not in text and "+" not in text:
+                # Nothing to decode: splitting by hand is several times faster than urllib.
+                for part in text.split("&"):
+                    if part:
+                        name, _, value = part.partition("=")
+                        grouped.setdefault(name, []).append(value)
+            else:
+                for name, value in parse_qsl(text, keep_blank_values=True):
+                    grouped.setdefault(name, []).append(value)
+            self._query = grouped
         return self._query
 
     def cookie(self, name: str) -> str | None:
@@ -139,22 +152,41 @@ class Request:
 
     def set_valid(self, target: str, value: object) -> None:
         """Store the object a validator produced for `target` (json, query, ...)."""
+        if self._valid is None:
+            self._valid = {}
         self._valid[target] = value
 
     def valid[T](self, kind: type[T], target: str | None = None) -> T:
         """The validated object of type `kind`. Pass `target` if two targets share the type."""
-        name = getattr(kind, "__name__", repr(kind))
+        valid: dict[str, object] = {} if self._valid is None else self._valid
         if target is not None:
-            if target not in self._valid:
+            if target not in valid:
                 raise LookupError(f"this route did not validate {target!r}")
-            return cast(T, self._valid[target])
-        wanted = get_origin(kind) or kind
-        matches = [t for t, obj in self._valid.items() if isinstance(obj, wanted)]
+            return cast(T, valid[target])
+        wanted = _runtime_type(kind)
+        if len(valid) == 1:
+            # One validated part is the common case: no need to look for ambiguity.
+            only = next(iter(valid.values()))
+            if isinstance(only, wanted):
+                return cast(T, only)
+        matches = [t for t, obj in valid.items() if isinstance(obj, wanted)]
+        name = getattr(kind, "__name__", repr(kind))
         if not matches:
             raise LookupError(f"this route did not validate {name}")
         if len(matches) > 1:
             raise ValueError(f"{name} is ambiguous: validated for {matches}; pass target=")
-        return cast(T, self._valid[matches[0]])
+        return cast(T, valid[matches[0]])
+
+
+def _runtime_type(kind: object) -> type:
+    """The class to `isinstance`-check against: `list` for `list[User]`, the class itself else."""
+    if isinstance(kind, type):
+        return kind
+    origin = get_origin(kind)
+    if isinstance(origin, type):
+        return origin
+    message = f"cannot validate against {kind!r}"
+    raise TypeError(message)
 
 
 def _parse_cookies(header: str) -> dict[str, str]:

@@ -4,6 +4,8 @@ from honoka import Context, Middleware, Next, Response
 
 DEFAULT_METHODS = ("GET", "HEAD", "PUT", "POST", "DELETE", "PATCH")
 
+type Pairs = tuple[tuple[str, str], ...]
+
 
 def cors(
     *,
@@ -14,42 +16,54 @@ def cors(
     credentials: bool = False,
     max_age: int | None = None,
 ) -> Middleware:
-    """CORS. Preflights are answered before routing. `headers=None` echoes the requested headers."""
+    """CORS. Preflights are answered before routing. `headers=None` echoes the requested headers.
+
+    The headers added for each allowed origin are rendered once here, not on every request."""
     wildcard = "*" in origins
     if wildcard and credentials:
         raise ValueError("credentials cannot be combined with a wildcard origin")
-    allowed = frozenset(origins)
 
-    def decorate(response: Response, origin: str) -> None:
-        response.headers.append(("access-control-allow-origin", "*" if wildcard else origin))
-        if not wildcard:
-            response.headers.append(("vary", "Origin"))
-        if credentials:
-            response.headers.append(("access-control-allow-credentials", "true"))
+    tail: Pairs = ()
+    if credentials:
+        tail += (("access-control-allow-credentials", "true"),)
+    simple_tail = tail
+    if expose:
+        simple_tail += (("access-control-expose-headers", ", ".join(expose)),)
+
+    def head(origin: str) -> Pairs:
+        if wildcard:
+            return (("access-control-allow-origin", "*"),)
+        return (("access-control-allow-origin", origin), ("vary", "Origin"))
+
+    simple: dict[str, Pairs] = {o: head(o) + simple_tail for o in origins}
+    wildcard_simple = head("*") + simple_tail
+    preflight_head: dict[str, Pairs] = {o: head(o) + tail for o in origins}
+    wildcard_preflight_head = head("*") + tail
+    preflight_tail: Pairs = (("access-control-allow-methods", ", ".join(methods)),)
+    if headers is not None:
+        preflight_tail += (("access-control-allow-headers", ", ".join(headers)),)
+    if max_age is not None:
+        preflight_tail += (("access-control-max-age", str(max_age)),)
 
     async def middleware(c: Context, call_next: Next) -> Response:
         origin = c.req.header("origin")
-        accepted = origin if origin is not None and (wildcard or origin in allowed) else None
-        requested_method = c.req.header("access-control-request-method")
-        if origin is not None and c.req.method == "OPTIONS" and requested_method is not None:
+        if origin is None:
+            return await call_next()
+        pairs = wildcard_simple if wildcard else simple.get(origin)
+        if c.req.method == "OPTIONS" and c.req.header("access-control-request-method") is not None:
             preflight = Response(b"", 204)
-            if accepted is not None:
-                decorate(preflight, accepted)
-                preflight.headers.append(("access-control-allow-methods", ", ".join(methods)))
+            opening = wildcard_preflight_head if wildcard else preflight_head.get(origin)
+            if opening is not None:
+                preflight.headers.extend(opening)
+                preflight.headers.extend(preflight_tail)
                 requested = c.req.header("access-control-request-headers")
-                allow_headers = ", ".join(headers) if headers is not None else requested
-                if allow_headers is not None and allow_headers != "":
-                    preflight.headers.append(("access-control-allow-headers", allow_headers))
-                    if headers is None:
-                        preflight.headers.append(("vary", "Access-Control-Request-Headers"))
-                if max_age is not None:
-                    preflight.headers.append(("access-control-max-age", str(max_age)))
+                if headers is None and requested is not None and requested != "":
+                    preflight.headers.append(("access-control-allow-headers", requested))
+                    preflight.headers.append(("vary", "Access-Control-Request-Headers"))
             return preflight
         response = await call_next()
-        if accepted is not None:
-            decorate(response, accepted)
-            if expose:
-                response.headers.append(("access-control-expose-headers", ", ".join(expose)))
+        if pairs is not None:
+            response.headers.extend(pairs)
         return response
 
     return middleware

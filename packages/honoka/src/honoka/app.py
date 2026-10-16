@@ -231,11 +231,8 @@ class App:
 
     def _endpoint(self, handler: Handler, inline: bool) -> Chain:
         if _is_async(handler):
-
-            async def run_async(c: Context) -> Response:
-                return await cast("Awaitable[Response]", handler(c))
-
-            return run_async
+            # An `async def` handler already is `(Context) -> Awaitable[Response]`.
+            return cast("Chain", handler)
         if inline:
 
             async def run_inline(c: Context) -> Response:
@@ -253,9 +250,13 @@ class App:
         return run_in_thread
 
     def _compose(self, middlewares: list[Middleware], endpoint: Chain) -> Chain:
-        step = self._guard(endpoint)
+        """Wrap `endpoint` in `middlewares`, outermost first.
+
+        Each step a middleware calls is guarded, so the middleware sees an error response instead
+        of an exception. The outermost step is guarded by `__rsgi__`, saving one frame a request."""
+        step = endpoint
         for mw in reversed(middlewares):
-            step = self._guard(self._layer(mw, step))
+            step = self._layer(mw, self._guard(step))
         return step
 
     @staticmethod
@@ -294,13 +295,20 @@ class App:
         else:
             wrapping = [mw for pattern, mw in self._middlewares if _matches(pattern, scope.path)]
             chain = self._compose(wrapping, self._unmatched)
-        response = await chain(c)
+        try:
+            response = await chain(c)
+        except Exception as exc:  # noqa: BLE001 - the framework boundary catches everything
+            response = await self._handle_error(c, exc)
         if head:
             response.body = b""
-        response.headers.extend(("set-cookie", v) for v in c.set_cookies)
-        if isinstance(response, Stream) and not head:
-            await self._send_stream(proto, response)
-        elif response.body and not isinstance(response, Stream):
+        if c.set_cookies is not None:
+            response.headers.extend(("set-cookie", v) for v in c.set_cookies)
+        if isinstance(response, Stream):
+            if head:
+                proto.response_empty(response.status, response.headers)
+            else:
+                await self._send_stream(proto, response)
+        elif response.body:
             proto.response_bytes(response.status, response.headers, response.body)
         else:
             proto.response_empty(response.status, response.headers)

@@ -77,3 +77,45 @@ def test_the_body_can_be_read_more_than_once_and_parsed_as_json() -> None:
     with echo_app().test() as client:
         resp = client.post("/echo", json={"a": 1})
     assert resp.json() == {"same": True, "json": {"a": 1}}
+
+
+QUERY_CASES = [
+    "",
+    "a=1",
+    "a=1&b=2",
+    "a=1&a=2&b=3",
+    "flag",
+    "flag&a=1",
+    "a=&b=",
+    "a=1&&b=2",
+    "&a=1&",
+    "a=b=c",
+    "q=hi%20there&tag=a+b",
+    "name=%E3%81%B2%E3%82%89&x=1",
+    "a=1;b=2",
+    "=empty-name&a=1",
+    "a=%zz",
+]
+
+
+def test_query_parsing_agrees_with_the_standard_library_on_tricky_inputs() -> None:
+    """The oracle is urllib: a faster parser must return exactly what it returns."""
+    from urllib.parse import parse_qsl
+
+    app = App()
+    seen: list[list[tuple[str, str]]] = []
+
+    @app.get("/q")
+    def handler(c: Context) -> Response:
+        names = {k for k, _ in parse_qsl(c.req.query_string, keep_blank_values=True)}
+        seen.append([(n, v) for n in sorted(names) for v in c.req.queries(n)])
+        return c.text(c.req.query("a") or "")
+
+    with app.test() as client:
+        for raw in QUERY_CASES:
+            client.get(f"/q?{raw}")
+
+    for raw, got in zip(QUERY_CASES, seen, strict=True):
+        parsed = parse_qsl(raw, keep_blank_values=True)
+        expected = [(n, v) for n in sorted({k for k, _ in parsed}) for k2, v in parsed if k2 == n]
+        assert got == expected, raw
