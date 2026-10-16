@@ -35,6 +35,25 @@ honoka check app                      # find handlers that read data no validato
 Test without a server: `with app.test() as client: client.get("/users/1")`
 (it drives the ASGI entry).
 
+## Install
+
+Not on PyPI yet. Install from GitHub with uv; every package lives in `packages/<name>` of this repo,
+so name each one with its `subdirectory`:
+
+```toml
+[project]
+dependencies = ["honoka", "honoka-msgspec", "honoka-cors"]
+
+[tool.uv.sources]
+honoka = { git = "https://github.com/radius5-study/honoka", subdirectory = "packages/honoka" }
+honoka-msgspec = { git = "https://github.com/radius5-study/honoka", subdirectory = "packages/honoka-msgspec" }
+honoka-cors = { git = "https://github.com/radius5-study/honoka", subdirectory = "packages/honoka-cors" }
+```
+
+or one at a time: `uv add "honoka @ git+https://github.com/radius5-study/honoka#subdirectory=packages/honoka"`.
+List `honoka` itself as a dependency too: the other packages depend on it by name, and uv only
+reads `tool.uv.sources` for the packages your own project names.
+
 ## Packages
 
 `honoka` (core, no dependencies), `honoka-msgspec`, `honoka-openapi`, `honoka-llms`,
