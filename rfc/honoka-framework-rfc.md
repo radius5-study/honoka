@@ -1,4 +1,4 @@
-# RFC: honoka — A Thin, Strictly Typed Python Web Framework on Granian (RSGI)
+# RFC: honoka — A Thin, Strictly Typed Python Web Framework for ASGI
 
 - Status: Draft
 - Created: 2026-10-16
@@ -8,27 +8,34 @@
 
 ## 1. Overview
 
-We will build a web framework that brings the philosophy of Hono (JS) — "a thin core, Context-centric, middleware-oriented, and not forcing unnecessary things on the user" — to Python. The primary target runtime is Granian (RSGI); Granian already keeps I/O in Rust, so honoka itself stays pure Python for v0/v1 and minimizes per-request framework overhead through registration-time precompilation and strict typing. Routing moves to Rust only if benchmarks justify it (see 12.2). At the same time, we adopt an "agent-first" stance: the goal is a framework that is **easy for AI agents to write**, and that produces APIs that are **easy for agents to use as clients**.
+We will build a web framework that brings the philosophy of Hono (JS) — "a thin core, Context-centric, middleware-oriented, and not forcing unnecessary things on the user" — to Python. honoka speaks one server interface, ASGI, so the same app runs on Granian, uvicorn and Cloudflare Python Workers (as Hono runs on any runtime that speaks the Web standard). Granian is the recommended server: it keeps I/O in Rust, so honoka itself stays pure Python for v0/v1 and minimizes per-request framework overhead through registration-time precompilation and strict typing. Routing moves to Rust only if benchmarks justify it (see 12.2). At the same time, we adopt an "agent-first" stance: the goal is a framework that is **easy for AI agents to write**, and that produces APIs that are **easy for agents to use as clients**.
 
 ## 2. Background and Motivation
 
 ### 2.1 Problems with existing frameworks
 
 - **FastAPI**: The de facto standard, but its RPS is low (the combined cost of decorator introspection, Pydantic, and DI); it has no concept of a request context (the context is scattered across function-argument DI); and type expressions such as `Annotated[Query, Depends(...)]` are poor
-- **Swapping the server (uvicorn → Granian) does not solve it by itself**: Synthetic benchmarks show multi-fold differences, but in real applications (DB-bound) the difference is within 5–10%. That also bounds what any framework swap can gain, so honoka does not sell raw speed alone: the goal is to keep framework overhead as close as possible to a bare RSGI app, and to prove it with benchmarks against other frameworks (see 11.1)
+- **Swapping the server (uvicorn → Granian) does not solve it by itself**: Synthetic benchmarks show multi-fold differences, but in real applications (DB-bound) the difference is within 5–10%. That also bounds what any framework swap can gain, so honoka does not sell raw speed alone: the goal is to keep framework overhead as close as possible to a bare ASGI app, and to prove it with benchmarks against other frameworks (see 11.1)
 - **Hono v5**: Raising type safety (e.g., `c.req.json()` now returning `unknown`) has come at the expense of writing ergonomics. There is room on the Python side to achieve equivalent safety with better DX
 
 ### 2.2 Technical foundations
 
-- **ASGI**: The community-driven de facto specification between server and application. Compatibility is high, but it carries structural overhead from round-tripping event dicts
-- **RSGI**: Granian's own specification for the Rust⇄Python boundary. Rust owns I/O and threading, and a synchronous response (`proto.response_str`) lets the application reply without awaiting anything
+- **ASGI**: The community-driven de facto specification between server and application, and the only one that Cloudflare Python Workers (`asgi.entrypoint(app)`), uvicorn, Granian and Hypercorn all serve. It carries structural overhead from round-tripping event dicts
 - **Granian**: A server written in Rust (tokio + hyper + PyO3). Supports ASGI/WSGI/RSGI, HTTP/1 and HTTP/2, and WebSocket, and has a production track record. Not supported: HTTP/3, trio/gevent, and some ASGI extensions
+
+### 2.3 Decision: ASGI only, no RSGI
+
+Granian's own interface, RSGI, was the first target. It is dropped because it buys little and costs a second path:
+
+- **Portability is a requirement**: Workers (Pyodide) and every other host speak ASGI only. An RSGI path would be a second entry to build, test and keep identical
+- **Measured gap** (one Granian worker, `ab`, honoka's own app, three alternating runs on a laptop, noisy): ASGI was 5–15% slower than RSGI. For a bare hello-world app, raw ASGI and raw RSGI measured the same (about 43–45k rps per worker). In DB-bound services the framework is a small share of the request, so we accept the gap
+- **Revisit if**: a benchmark shows the ASGI scope/send round trip dominating real workloads. The fix would be a thinner Context over the ASGI scope, not a second interface
 
 ## 3. Design Principles
 
 1. **Context first**: Handlers take only a `Context` argument. This eliminates DI hell
-2. **No dicts at the boundary**: Keep RSGI's `scope` as a handle to the Rust-side object, and convert it to Python lazily on access (lazy binding)
-3. **Synchronous handlers are supported, and safe by default**: `def` handlers run in a worker thread so that blocking I/O cannot stall the event loop. Calling them inline on the loop (which rides on RSGI's `response_str`) is an explicit opt-in (`inline=True`), added only after the PoC benchmark shows it matters
+2. **Touch the scope only when asked**: The ASGI scope is already a dict, so nothing is converted up front. Headers are indexed, the query parsed and the body read on first access, and per-request state (cookies, stored values) is created only when used
+3. **Synchronous handlers are supported, and safe by default**: `def` handlers run in a worker thread so that blocking I/O cannot stall the event loop. Calling them inline on the loop is an explicit opt-in (`inline=True`); it is also the only mode where threads do not exist (Pyodide, see 4.3)
 4. **Keep the core thin**: The core contains no schema validation, OpenAPI, or authentication. These are middleware/plugins; each official middleware is its own package, e.g. `honoka-cors` (see 9.4). The core has no third-party dependencies: JSON goes through a pluggable codec (`App(json_codec=...)`), which is the standard library by default and `MsgspecCodec` from honoka-msgspec for Structs
 5. **Validation is a single layer**: msgspec only. Do not split it across multiple layers (e.g., Rust-side validation), which would multiply the owners of "correctness". The core only converts scalar path/query parameters (`c.req.param(name, type)`); that is parsing, not schema validation
 6. **Standard type features only**: Do not rely on mypy plugins. Passing under the strictest settings of ty and Pyrefly is a design requirement
@@ -40,41 +47,45 @@ We will build a web framework that brings the philosophy of Hono (JS) — "a thi
 ```
 Client
    ↕ HTTP/1 and HTTP/2, WebSocket
-Granian (Rust: tokio + hyper)
-   ↕ RSGI (fastest on Granian) / ASGI (Cloudflare Workers, any ASGI server)
+Granian (Rust: tokio + hyper) / uvicorn / Cloudflare Python Workers
+   ↕ ASGI
 honoka core
    ├─ Routing (RegExpRouter style in pure Python: one compiled regex per method; Rust only if benchmarks justify it, see 12.2)
-   ├─ Context (lazy binding)
+   ├─ Context (state created on first use)
    └─ Middleware onion execution
    ↕
 honoka-msgspec / honoka-openapi / other plugins
 ```
 
-### 4.1 Mapping to RSGI
+### 4.1 The ASGI entry
 
 ```python
-async def rsgi_app(scope, proto):
-    ctx = Context(scope, proto)  # scope is a handle to the Rust-side object
-    handler = router.match(scope.method, scope.path)
-    resp = await dispatch(ctx, handler, middlewares)
-    resp.emit(
-        proto
-    )  # choose response_str / response_bytes / response_stream / response_file depending on the response type
+async def __call__(self, scope, receive, send):
+    if scope["type"] == "http":
+        ctx = Context(Request(scope, receive))  # nothing is parsed yet
+        handler = router.match(scope["method"], scope["path"])
+        resp = await dispatch(ctx, handler, middlewares)
+        await emit(resp, send)  # one response start and one body; a Stream sends chunks as produced
+    elif scope["type"] == "lifespan":
+        ...  # startup / shutdown hooks
 ```
+
+The app object is the ASGI callable. There is no adapter layer and no second interface; the test client drives this same entry (`app.test()`).
 
 ### 4.2 Responsibility boundaries if a Rust core is adopted (conditional, see 12.2)
 
-- **Does**: routing, holding the Context object, emitting responses (the HTTP layer is Granian)
+- **Does**: routing, holding the Context object, emitting responses (the HTTP layer belongs to the server)
 - **Does not**: validation (does not look inside the JSON), business logic
 
-### 4.3 ASGI adapter
+### 4.3 Hosts
 
-- v1, because the app must also run on Cloudflare Python Workers, which serve ASGI (`from workers import asgi; Default = asgi.entrypoint(app)`). The app object is itself the ASGI callable: `App.__call__(scope, receive, send)`
-- It feeds the same `Context`, handlers and middleware as RSGI; `honoka.asgi` only adapts scope, headers and body. The test client runs every request through either entry (`app.test(interface="asgi")`) and one suite asserts identical responses
-- Lifespan is handled; without a lifespan (Workers) startup hooks run lazily once, on the first request, under a lock. WebSocket scopes are closed with 1000 until v3
-- `NO_THREADS` (true on `emscripten`, i.e. Pyodide) makes plain `def` handlers run inline, since Workers has no threads. `c.file` reads the bytes there; there is no disk
-- Open: the Pyodide version Workers pins decides which msgspec the validator can use (Pyodide ships 0.19-0.20); verify before the first deploy
-- RSGI stays the faster path on Granian (measured equal to raw RSGI); ASGI costs one extra dict of scope per request
+- **Granian / uvicorn**: `granian --interface asgi app:app`. Lifespan is handled: startup and shutdown hooks run when the server announces them
+- **Cloudflare Python Workers**: `from workers import asgi; Default = asgi.entrypoint(app)`. There is no lifespan, so startup hooks run lazily once, on the first request, under a lock
+- **No threads on Pyodide**: `NO_THREADS` (true on `emscripten`) makes plain `def` handlers run inline. `c.file` reads the bytes there; there is no disk
+- **WebSocket** scopes are closed with 1000 until v3
+- **Open**: the Pyodide version Workers pins decides which msgspec the validator can use (Pyodide ships 0.19-0.20); verify before the first deploy
+- **Open**: `c.file` reads the whole file into memory. Servers that offer the `http.response.pathsend` extension (Granian does, to be verified) could send the file themselves
+- **Known limits**: `root_path` is ignored, so mounting under a sub-path is a v2 `mount` concern; a client disconnect while the body is being read ends the read with what arrived
 
 ## 5. Core API
 
@@ -120,7 +131,7 @@ class Key[T]:
 
 
 class Context:  # no type parameters
-    req: Request  # access to header/query/param/body (lazy binding)
+    req: Request  # access to header/query/param/body (read on first use)
 
     def set[T](self, key: Key[T], value: T) -> None: ...
     def get[T](self, key: Key[T]) -> T: ...  # raises LookupError if the key was never set
@@ -283,7 +294,7 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 |---|---|---|
 | v1 (core) | cookie | `c.req.cookie(name)`, `c.cookie(name, value, ...)`, `c.delete_cookie(name)` |
 | v1 (core) | accepts | `c.req.accepts(["application/json", "text/html"])` for content negotiation |
-| v1 (core) | conninfo | `c.req.client` (remote address from the RSGI scope) |
+| v1 (core) | conninfo | `c.req.client` (remote address from the ASGI scope) |
 | v1 (core) | route | `c.route` (the matched route template, e.g. `/users/{user_id}`), used by logger/metrics so that labels stay low-cardinality |
 | v1 (core) | html | `c.html(str)` (needed for the docs page; no template DSL) |
 | v1 (core) | file | `c.file(path, root=..., filename=...)`: the server streams the file from disk. Pass `root` when `path` comes from a request, so `../` and absolute paths are a 404 |
@@ -312,9 +323,9 @@ honoka-mcp        … MCP exposure (future)
 - **v0 (PoC)**
   1. Verify msgspec + ty/Pyrefly compatibility
   2. Verify `Key[T]`, `c.req.valid(T)`, and `Json[T]` in both checkers (`ok.py` / `bad.py`)
-  3. Implement the lazy-binding Context on Granian/RSGI
-  4. Build the benchmark harness (see 11.1) and a minimal implementation (static routing, `Json[T]` returns, a `Context` that can be constructed without RSGI); measure the cost of the Context abstraction against bare RSGI and the other frameworks
-- **v1**: Complete the core (middleware, error handling, synchronous handlers), honoka-msgspec, honoka-openapi (Scalar), honoka check, the v1 middleware packages of 9.4, a minimal `app.test()`, the ASGI entry (4.3)
+  3. Implement the Context over the ASGI scope
+  4. Build the benchmark harness (see 11.1) and a minimal implementation (static routing, `Json[T]` returns, a `Context` that can be constructed without a server); measure the cost of the Context abstraction against bare ASGI and the other frameworks
+- **v1**: Complete the core (middleware, error handling, synchronous handlers), honoka-msgspec, honoka-openapi (Scalar), honoka check, the v1 middleware packages of 9.4, a minimal `app.test()`, Cloudflare Workers support (4.3)
 - **v2**: the v2 middleware packages (authentication, idempotency, rate limiting, ...), full test client
 - **v3 and later**: Formal design of WebSocket/SSE, honoka-mcp
 
@@ -323,18 +334,18 @@ honoka-mcp        … MCP exposure (future)
 The benchmarks must be runnable by anyone with one command and must compare honoka with other frameworks.
 
 - **Harness**: a uv workspace member `benchmarks/`. One app per framework in `benchmarks/apps/<framework>/`, and a runner that starts each app under identical conditions, drives it with a load generator (`oha` or `wrk`), and writes JSON plus a Markdown table
-- **Frameworks**: bare Granian RSGI (the baseline), honoka, FastAPI, Litestar, Starlette, Falcon, BlackSheep, Robyn
-- **Server**: Granian for everything except Robyn (RSGI for honoka and the baseline, ASGI for the others), so that the framework is the only variable. A second run uses each framework's recommended server
+- **Frameworks**: bare ASGI (the baseline), honoka, FastAPI, Litestar, Starlette, Falcon, BlackSheep, Robyn
+- **Server**: Granian (ASGI) for everything except Robyn, so that the framework is the only variable. A second run uses each framework's recommended server
 - **Scenarios**: (1) plaintext `/health`; (2) fixed JSON response; (3) path parameter; (4) JSON body validation plus JSON response; (5) middleware stack (logger + CORS + request-id); (6) the same with a simulated 5 ms async I/O, to show the real-world gap
 - **Metrics**: RPS, p50/p99 latency, CPU time per request, RSS. Fixed worker count, warm-up, median of N runs; record hardware, versions, and git SHA
 - **Fairness**: each app is written idiomatically with equivalent validation and no logging. Results are committed as artifacts
-- **Gate**: CI checks honoka against bare RSGI (budget decided after the first baseline), never against other frameworks
+- **Gate**: CI checks honoka against bare ASGI (budget decided after the first baseline), never against other frameworks
 
 ## 12. Open Questions
 
 1. **Context design for WebSocket/SSE**: Fold it into the HTTP req/res model, or make it a separate abstraction
-2. **Packaging/build**: Whether to build a Rust core (via maturin) all the way to custom routing, or to stay pure Python on top of Granian's RSGI. Build v0 in pure Python first and decide based on profiling
-3. **Test client `app.test()`**: Whether a Context can be constructed without RSGI. A litmus test for whether the Context abstraction is sound
+2. **Packaging/build**: Whether to build a Rust core (via maturin) all the way to custom routing, or to stay pure Python on top of ASGI. Build v0 in pure Python first and decide based on profiling
+3. **Test client `app.test()`**: Whether a Context can be constructed without a server. A litmus test for whether the Context abstraction is sound
 4. **Treatment of DI**: In principle, we do not have it. Request scope is the Context; globals are published with `app.provide(KEY, value)` and read with `c.get(KEY)` (typed keys, see 5.2). Revisit if requested
 5. ~~Naming~~ → **honoka** decided (PyPI availability confirmed. A double meaning: a tribute to Hono (炎, "flame"), and the design philosophy that ほのか (honoka) means "faint, slight, thin")
 6. **`call_next()` vs `call_next(c)`**: The first allocates a closure per request per middleware; the second lets the chain be composed once at registration. Decide with the v0 benchmark
@@ -347,6 +358,7 @@ The benchmarks must be runnable by anyone with one command and must compare hono
 | Adopting Pydantic as the validator | 6–15× slower than msgspec. It also avoids defining Structs twice, so msgspec has the edge |
 | Rust-side pre-validation | Ownership of "correctness" splits across three layers, making debugging difficult. The complexity never gets contained |
 | Built-in validation in the core | Violates Hono's "thin core" principle. Middleware is sufficient |
+| RSGI as a second interface | Only Granian speaks it, Workers cannot; measured gain 5–15% over ASGI on honoka's own app (2.3) |
 | Swagger UI | Scalar is adopted instead |
 | mypy plugins | Violates the design requirement of expressing everything with standard type features |
 | Automatic inference of Context type parameters (TS-style) | Limits of the Python type system |
@@ -355,7 +367,7 @@ The benchmarks must be runnable by anyone with one command and must compare hono
 
 ## 14. Reference Implementations
 
-- **Granian / RSGI specification**: A prior answer to the Rust⇄Python boundary. Essential reading as design material
+- **ASGI specification and Granian**: The server interface honoka targets; Granian is the Rust server it is tuned on
 - **Robyn**: A framework built on PyO3 + tokio. A reference for the messy details of bridging event loops
 - **Hono**: The canonical reference for API design (Context, onion middleware, validator)
 - **Litestar**: A msgspec-native framework that ships a Scalar plugin; the closest existing alternative, so it is a required benchmark and comparison target
