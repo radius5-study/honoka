@@ -1,0 +1,13 @@
+[project]
+name = "honoka"
+version = "0.1.0"
+description = "A thin Python web framework for Granian (RSGI), inspired by Hono"
+authors = [
+    { name = "L4Ph", email = "me@l4ph.moe" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
