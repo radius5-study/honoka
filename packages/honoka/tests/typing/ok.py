@@ -1,16 +1,17 @@
 """Must pass `ty check --error all` and `pyrefly check --preset strict`."""
 
+from dataclasses import dataclass
 from typing import assert_type
-
-import msgspec
 
 from honoka import Context, Json, Key
 
 
-class User(msgspec.Struct):
+@dataclass
+class User:
     name: str
 
 
+@dataclass
 class Admin(User):
     level: int
 

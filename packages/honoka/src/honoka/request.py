@@ -3,19 +3,21 @@ from collections.abc import Mapping, Sequence
 from typing import overload
 from urllib.parse import parse_qsl
 
-import msgspec
-
 from honoka._rsgi import Proto, Scope
 from honoka.errors import HTTPError
+from honoka.json import JsonCodec
 
 
 class Request:
-    __slots__ = ("_body", "_cookies", "_params", "_proto", "_query", "_scope")
+    __slots__ = ("_body", "_codec", "_cookies", "_params", "_proto", "_query", "_scope")
 
-    def __init__(self, scope: Scope, proto: Proto, params: Mapping[str, str]) -> None:
+    def __init__(
+        self, scope: Scope, proto: Proto, params: Mapping[str, str], codec: JsonCodec
+    ) -> None:
         self._scope = scope
         self._proto = proto
         self._params = params
+        self._codec = codec
         self._query: list[tuple[str, str]] | None = None
         self._cookies: dict[str, str] | None = None
         self._body: bytes | None = None
@@ -100,8 +102,7 @@ class Request:
 
     async def json(self) -> object:
         """The body decoded as JSON, typed `object` so callers must narrow it."""
-        decoded: object = msgspec.json.decode(await self.body())
-        return decoded
+        return self._codec.decode(await self.body())
 
 
 def _parse_cookies(header: str) -> dict[str, str]:

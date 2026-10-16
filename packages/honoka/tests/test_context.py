@@ -1,11 +1,12 @@
 """Typed keys and Json responses, observed through requests to an app."""
 
-import msgspec
+from dataclasses import dataclass
 
 from honoka import App, Context, Json, Key, Response
 
 
-class User(msgspec.Struct):
+@dataclass
+class User:
     name: str
 
 
@@ -56,12 +57,12 @@ def test_two_keys_with_the_same_name_are_distinct_slots() -> None:
         assert client.get("/").text == "distinct"
 
 
-def test_json_response_encodes_a_struct_without_a_dict() -> None:
+def test_json_response_is_compact_utf8() -> None:
     app = App()
 
     @app.get("/")
-    def handler(c: Context) -> Json[User]:
-        return c.json(User(name="é"), status=201)
+    def handler(c: Context) -> Json[dict[str, str]]:
+        return c.json({"name": "é"}, status=201)
 
     with app.test() as client:
         resp = client.get("/")
@@ -71,5 +72,5 @@ def test_json_response_encodes_a_struct_without_a_dict() -> None:
 
 def test_json_does_not_mutate_the_headers_the_caller_passed() -> None:
     headers = [("x-a", "1")]
-    Json(User(name="a"), headers=headers)
+    Json({"a": 1}, headers=headers)
     assert headers == [("x-a", "1")]

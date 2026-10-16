@@ -2,16 +2,9 @@
 
 from collections.abc import AsyncIterator
 
-import msgspec
-
 from honoka import App, Context, Json, Key, Next, Response
 
 DB: Key[str] = Key("db")
-
-
-class User(msgspec.Struct):
-    id: int
-    name: str
 
 
 app = App()
@@ -37,8 +30,8 @@ def health(c: Context) -> Response:
 
 
 @app.get("/users/{user_id}")
-async def get_user(c: Context) -> Json[User]:
-    return c.json(User(id=c.req.param("user_id", int), name=c.get(DB)))
+async def get_user(c: Context) -> Json[dict[str, object]]:
+    return c.json({"id": c.req.param("user_id", int), "name": c.get(DB)})
 
 
 @app.post("/echo")

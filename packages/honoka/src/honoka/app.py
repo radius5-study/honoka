@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 from honoka._rsgi import Proto, Scope
 from honoka.context import Context, Key
 from honoka.errors import HTTPError, default_error_response
+from honoka.json import STDLIB_JSON, JsonCodec
 from honoka.request import Request
 from honoka.response import Response, Stream
 from honoka.router import NO_PARAMS, Chain, Route, RouteInfo, Router, split
@@ -57,7 +58,8 @@ def _matches(pattern: str, target: str) -> bool:
 
 
 class App:
-    def __init__(self) -> None:
+    def __init__(self, *, json_codec: JsonCodec = STDLIB_JSON) -> None:
+        self._codec = json_codec
         self._routes: list[Route] = []
         self._middlewares: list[tuple[str, Middleware]] = []
         self._on_error: Handler | None = None
@@ -285,7 +287,7 @@ class App:
         if head:
             found = router.match("GET", scope.path)
         params = NO_PARAMS if found is None else found[1]
-        c = Context(Request(scope, proto, params), self._provided)
+        c = Context(Request(scope, proto, params, self._codec), self._provided, self._codec)
         if found is not None and found[0].chain is not None:
             c.route = found[0].pattern
             chain = found[0].chain

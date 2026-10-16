@@ -1,15 +1,17 @@
 """Every line marked `expect-error` must be flagged by both checkers, and no other line."""
 
-import msgspec
+from dataclasses import dataclass
 
 from honoka import Context, Json, Key
 
 
-class User(msgspec.Struct):
+@dataclass
+class User:
     name: str
 
 
-class Other(msgspec.Struct):
+@dataclass
+class Other:
     id: int
 
 

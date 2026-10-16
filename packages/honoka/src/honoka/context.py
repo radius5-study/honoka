@@ -4,6 +4,7 @@ import re
 from collections.abc import AsyncIterable
 from typing import TYPE_CHECKING, Literal, cast
 
+from honoka.json import JsonCodec
 from honoka.response import Json, Response, Stream
 
 if TYPE_CHECKING:
@@ -30,14 +31,15 @@ class Key[T]:
 
 
 class Context:
-    __slots__ = ("_provided", "_store", "error", "req", "route", "set_cookies")
+    __slots__ = ("_codec", "_provided", "_store", "error", "req", "route", "set_cookies")
 
-    def __init__(self, req: "Request", provided: dict[object, object]) -> None:
+    def __init__(self, req: "Request", provided: dict[object, object], codec: JsonCodec) -> None:
         self.req = req
         self.error: Exception | None = None
         self.route: str | None = None
         self._store: dict[object, object] = {}
         self._provided = provided
+        self._codec = codec
         self.set_cookies: list[str] = []
 
     def set[T](self, key: Key[T], value: T) -> None:
@@ -52,7 +54,7 @@ class Context:
         raise LookupError(f"key {key.name!r} was never set")
 
     def json[T](self, obj: T, status: int = 200) -> Json[T]:
-        return Json(obj, status)
+        return Json(obj, status, codec=self._codec)
 
     def text(self, body: str, status: int = 200) -> Response:
         return Response(body.encode(), status, [("content-type", "text/plain; charset=utf-8")])

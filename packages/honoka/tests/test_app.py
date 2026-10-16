@@ -2,15 +2,9 @@
 
 import threading
 
-import msgspec
 import pytest
 
 from honoka import App, Context, Json, Response
-
-
-class User(msgspec.Struct):
-    id: int
-    name: str
 
 
 def test_sync_handler_responds_with_plain_text() -> None:
@@ -32,8 +26,8 @@ def test_async_handler_reads_a_typed_path_parameter_and_returns_json() -> None:
     app = App()
 
     @app.get("/users/{user_id}")
-    async def get_user(c: Context) -> Json[User]:
-        return c.json(User(id=c.req.param("user_id", int), name="a"))
+    async def get_user(c: Context) -> Json[dict[str, object]]:
+        return c.json({"id": c.req.param("user_id", int), "name": "a"})
 
     with app.test() as client:
         resp = client.get("/users/42")

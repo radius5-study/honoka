@@ -1,11 +1,10 @@
 """A synchronous client that drives an App through its real RSGI entry with a fake server."""
 
 import asyncio
+import json as jsonlib
 from collections.abc import Coroutine, Iterable, Mapping
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
-
-import msgspec
 
 if TYPE_CHECKING:
     from honoka.app import App
@@ -25,7 +24,8 @@ class ClientResponse:
         return self.body.decode()
 
     def json(self) -> object:
-        return msgspec.json.decode(self.body)
+        decoded: object = jsonlib.loads(self.body)
+        return decoded
 
 
 class _Headers:
@@ -125,7 +125,7 @@ class Client:
         raw_headers = [(k.lower(), v) for k, v in (headers or {}).items()]
         body = content or b""
         if json is not None:
-            body = msgspec.json.encode(json)
+            body = jsonlib.dumps(json).encode()
             raw_headers.append(("content-type", "application/json"))
         proto = _Proto(body)
         self._run(self._app.__rsgi__(_Scope(method, target, query, raw_headers), proto))
