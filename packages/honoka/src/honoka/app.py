@@ -1,14 +1,15 @@
 """The App: route registration, registration-time chain composition, and the ASGI entry."""
 
 import asyncio
+import copy
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, cast, overload
+from typing import TYPE_CHECKING, Self, cast, overload
 
 from honoka.asgi import AsgiMessage, AsgiScope, HttpScope, Receive, Send, run_lifespan
 from honoka.context import Context, Key
-from honoka.errors import HTTPError, NotFound, default_error_response
+from honoka.errors import HTTPError, NotFound, default_error_response, logger
 from honoka.fallback import Fallback, Fallbacks
 from honoka.json import STDLIB_JSON, JsonCodec
 from honoka.request import Request
@@ -21,11 +22,13 @@ from honoka.router import (
     RouterFactory,
     RouterLike,
     SmartRouter,
+    expand_optional,
     normalize,
     parse_pattern,
     split,
 )
 from honoka.types import Handler, Middleware, Next
+from honoka.websocket import WebSocket, WebSocketDisconnect
 
 if TYPE_CHECKING:
     from honoka.testing import Client
@@ -37,6 +40,21 @@ type Hook = Callable[[], Awaitable[None] | None]
 DEFAULT_ROUTER: RouterFactory = SmartRouter
 
 ALL_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+
+type GetPath = Callable[[HttpScope], str]
+type WebSocketHandler = Callable[[WebSocket], Awaitable[None]]
+type AsgiApp = Callable[[AsgiScope, Receive, Send], Awaitable[None]]
+
+
+class _Shared:
+    """State that `base_path()` views of one app share: the compiled router and whether it ran."""
+
+    __slots__ = ("router", "started", "ws_router")
+
+    def __init__(self) -> None:
+        self.router: RouterLike | None = None
+        self.ws_router: RouterLike | None = None
+        self.started = False
 
 
 class _Next:
@@ -83,9 +101,11 @@ class App:
         json_codec: JsonCodec = STDLIB_JSON,
         strict: bool = True,
         router: RouterFactory | None = None,
+        get_path: GetPath | None = None,
     ) -> None:
         """`strict=False` makes `/a` and `/a/` the same path (Hono's `strict` option). `router`
-        picks the matching strategy: `SmartRouter` (default), `RegExpRouter` or `TrieRouter`."""
+        picks the matching strategy: `SmartRouter` (default), `RegExpRouter` or `TrieRouter`.
+        `get_path` decides which path is routed, e.g. to route on the host as well."""
         self._codec = json_codec
         self._strict = strict
         self._router_factory = DEFAULT_ROUTER if router is None else router
@@ -94,18 +114,44 @@ class App:
         self._on_error = Fallbacks(_matches)
         self._not_found = Fallbacks(_matches)
         self._provided: dict[object, object] = {}
-        self._router: RouterLike | None = None
+        self._shared = _Shared()
         self._seen: set[tuple[str, str]] = set()
         self._startup: list[Hook] = []
         self._shutdown: list[Hook] = []
-        self._started = False
+        self._get_path = get_path
+        self._base = ""
+        self._mounts: list[tuple[str, AsgiApp]] = []
+        self._websockets: list[tuple[str, WebSocketHandler]] = []
+
+    @property
+    def _router(self) -> RouterLike | None:
+        return self._shared.router
+
+    @_router.setter
+    def _router(self, value: RouterLike | None) -> None:
+        self._shared.router = value
+
+    @property
+    def _started(self) -> bool:
+        return self._shared.started
+
+    @_started.setter
+    def _started(self, value: bool) -> None:
+        self._shared.started = value
+
+    def base_path(self, prefix: str) -> Self:
+        """A view of this app whose routes, middleware and fallbacks all sit below `prefix`
+        (Hono's `basePath`). Both objects serve the same routes."""
+        view = copy.copy(self)
+        view._base = self._base + prefix.rstrip("/")
+        return view
 
     # -- registration -------------------------------------------------------------------------
 
     def _route[H: Handler](
         self,
         methods: Sequence[str],
-        path: str,
+        path: str | Sequence[str],
         middleware: tuple[Middleware, ...],
         inline: bool,
         meta: Mapping[str, object],
@@ -113,11 +159,19 @@ class App:
         verbs = tuple(dict.fromkeys(m.upper() for m in methods))
         if not verbs:
             raise ValueError("a route needs at least one HTTP method")
-        parse_pattern(path)  # a bad pattern fails here, at the decorator, not on a request
+        paths = [path] if isinstance(path, str) else list(path)
+        patterns = [
+            self._base + variant if variant != "/" or not self._base else self._base
+            for given in paths
+            for variant in expand_optional(given)
+        ]
+        for pattern in patterns:
+            parse_pattern(pattern)  # a bad pattern fails here, at the decorator, not on a request
 
         def decorator(handler: H) -> H:
-            for verb in verbs:
-                self._add(Route(verb, path, handler, middleware, inline, dict(meta)))
+            for pattern in patterns:
+                for verb in verbs:
+                    self._add(Route(verb, pattern, handler, middleware, inline, dict(meta)))
             return handler
 
         return decorator
@@ -138,7 +192,7 @@ class App:
     def route(self, prefix: str, sub: "App") -> None:
         """Mount `sub` under `prefix`. Its middleware applies only below the prefix; its
         `on_error`/`not_found` registrations come along and run before the parent's."""
-        prefix = prefix.rstrip("/")
+        prefix = self._base + prefix.rstrip("/")
         for r in sub._routes:
             pattern = prefix if r.pattern == "/" else prefix + r.pattern
             self._add(Route(r.method, pattern, r.handler, r.middleware, r.inline, r.meta))
@@ -148,7 +202,27 @@ class App:
             )
         self._on_error.mount(prefix, sub._on_error)
         self._not_found.mount(prefix, sub._not_found)
+        self._websockets.extend((prefix + path, h) for path, h in sub._websockets)
+        self._mounts.extend((prefix + path, app) for path, app in sub._mounts)
         self._router = None
+
+    def mount(self, prefix: str, app: AsgiApp) -> None:
+        """Serve another ASGI application below `prefix`. It sees the path without the prefix
+        (and the prefix in `root_path`). Mounted apps answer before this app's routes and
+        middleware run."""
+        self._mounts.append((self._base + prefix.rstrip("/"), app))
+
+    def ws[H: WebSocketHandler](self, path: str) -> Callable[[H], H]:
+        """Register a WebSocket handler: `async def chat(ws: WebSocket)`. It must `accept()`."""
+        pattern = self._base + path
+        parse_pattern(pattern)
+
+        def decorator(handler: H) -> H:
+            self._websockets.append((pattern, handler))
+            self._router = None
+            return handler
+
+        return decorator
 
     def on_startup[F: Hook](self, hook: F) -> F:
         self._startup.append(hook)
@@ -177,6 +251,12 @@ class App:
         self._started = False
         for hook in reversed(self._shutdown):
             await _run_hook(hook)
+
+    def query[H: Handler](
+        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
+    ) -> Callable[[H], H]:
+        """The HTTP `QUERY` method: a safe request that carries a body."""
+        return self._route(("QUERY",), path, middleware, inline, meta)
 
     def get[H: Handler](
         self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
@@ -216,12 +296,13 @@ class App:
     def on[H: Handler](
         self,
         methods: str | Sequence[str],
-        path: str,
+        path: str | Sequence[str],
         *middleware: Middleware,
         inline: bool = False,
         **meta: object,
     ) -> Callable[[H], H]:
-        """Register one handler for several methods: `@app.on(["GET", "POST"], "/form")`."""
+        """Register one handler for several methods and paths: `@app.on(["GET", "POST"],
+        ["/form", "/ja/form"])`. A method may be any token, e.g. `"PURGE"`."""
         verbs = (methods,) if isinstance(methods, str) else tuple(methods)
         return self._route(verbs, path, middleware, inline, meta)
 
@@ -235,8 +316,14 @@ class App:
         """Wrap every route (and unmatched request) whose path matches `path`, e.g. `/api/*`."""
         if not _is_async(middleware):
             raise TypeError(f"middleware {middleware!r} must be an async function")
-        self._middlewares.append((path, middleware))
+        self._middlewares.append((self._scoped(path), middleware))
         self._router = None
+
+    def _scoped(self, path: str) -> str:
+        """A middleware or fallback path below this view's base path."""
+        if not self._base:
+            return path
+        return self._base + "/*" if path in ("*", "/*") else self._base + path
 
     @overload
     def on_error[F: Fallback](self, handler: F, /) -> F: ...
@@ -247,7 +334,7 @@ class App:
     def on_error(self, *steps: str | Fallback) -> Fallback | None:
         """Decide the response for an error, read from `c.error`. Steps are `(c)` handlers or
         `(c, next)` middleware, optionally scoped by a path first; registrations stack."""
-        self._on_error.add(steps)
+        self._on_error.add(steps, self._base)
         return steps[0] if len(steps) == 1 and not isinstance(steps[0], str) else None
 
     @overload
@@ -258,7 +345,7 @@ class App:
 
     def not_found(self, *steps: str | Fallback) -> Fallback | None:
         """Answer requests that match no route, and `c.not_found()`. Same shape as `on_error`."""
-        self._not_found.add(steps)
+        self._not_found.add(steps, self._base)
         return steps[0] if len(steps) == 1 and not isinstance(steps[0], str) else None
 
     def route_table(self) -> list[RouteInfo]:
@@ -352,6 +439,11 @@ class App:
             route.chain = self._compose(applicable, self._endpoint(route.handler, route.inline))
             router.add(route)
         router.compile()
+        ws_router = self._router_factory(strict=self._strict)
+        for pattern, ws_handler in self._websockets:
+            ws_router.add(Route("WS", pattern, cast(Handler, ws_handler), (), False, {}))
+        ws_router.compile()
+        self._shared.ws_router = ws_router
         self._router = router
         return router
 
@@ -360,23 +452,60 @@ class App:
     async def __call__(self, scope: AsgiScope, receive: Receive, send: Send) -> None:
         """The ASGI entry: any ASGI server serves the app through it."""
         kind = scope["type"]
+        if kind == "lifespan":
+            await run_lifespan(self, receive, send)
+            return
+        if self._mounts and await self._mounted(scope, receive, send):
+            return
         if kind == "http":
             await self._dispatch(cast(HttpScope, scope), receive, send)
-        elif kind == "lifespan":
-            await run_lifespan(self, receive, send)
-        elif kind == "websocket":  # not supported yet: refuse the handshake politely
-            await receive()
+        elif kind == "websocket":
+            await self._serve_websocket(scope, receive, send)
+
+    async def _mounted(self, scope: AsgiScope, receive: Receive, send: Send) -> bool:
+        """Hand the request to a mounted ASGI app if its prefix covers the path."""
+        path = cast(str, scope["path"])
+        for prefix, app in self._mounts:
+            if path == prefix or path.startswith(prefix + "/"):
+                inner = dict(scope)
+                inner["path"] = path[len(prefix) :] or "/"
+                inner["root_path"] = cast(str, scope.get("root_path", "")) + prefix
+                await app(inner, receive, send)
+                return True
+        return False
+
+    async def _serve_websocket(self, scope: AsgiScope, receive: Receive, send: Send) -> None:
+        if self._router is None:
+            self._compile()
+        router = self._shared.ws_router
+        path = cast(str, scope["path"])
+        found = None if router is None else router.match("WS", path)
+        if found is None:
+            await receive()  # the connect event; closing before accept answers 403
             await send({"type": "websocket.close", "code": 1000})
+            return
+        socket = WebSocket(scope, receive, send, found[1], path)
+        handler = cast(WebSocketHandler, found[0].handler)
+        try:
+            await handler(socket)
+        except WebSocketDisconnect:
+            return
+        except Exception as exc:  # noqa: BLE001 - the framework boundary catches everything
+            logger.error("unhandled websocket error", exc_info=exc)
+            await socket.close(1011)
+            return
+        await socket.close()
 
     async def _dispatch(self, scope: HttpScope, receive: Receive, send: Send) -> None:
         router = self._router or self._compile()
-        method, path = scope["method"], scope["path"]
+        method = scope["method"]
+        path = scope["path"] if self._get_path is None else self._get_path(scope)
         found = router.match(method, path)
         head = found is None and method == "HEAD"
         if head:
             found = router.match("GET", path)
         params = NO_PARAMS if found is None else found[1]
-        c = Context(Request(scope, receive, params, self._codec), self._provided, self._codec)
+        c = Context(Request(scope, receive, params, self._codec, path), self._provided, self._codec)
         if found is not None and found[0].chain is not None:
             c.route = found[0].pattern
             chain = found[0].chain

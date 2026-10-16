@@ -118,8 +118,11 @@ async def get_user(c: Context) -> Json[User]:
 - `c.req.param(name, type)` raises a structured 400 when the conversion fails
 - Route groups: `app.route("/users", users_app)` mounts a sub-app under a prefix (Hono's `app.route`)
 - Lifecycle: `@app.on_startup` / `@app.on_shutdown` hooks create and close app-wide resources (e.g., DB pools), which are published with `app.provide(KEY, value)`
-- Methods: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`; `app.on(["GET", "POST"], path)` registers one handler for several methods and `app.all(path)` for every common one
-- Route patterns: a segment is a literal, `{name}` (any non-empty text), `{name:int|float|uuid|slug}`, `{rest:path}` (the rest of the path, last segment only), or a trailing `*` (the prefix itself and everything below it). A value a converter rejects is a 404, not a 400. Priority at one position: literal, then typed parameter (most specific first), then `{name}`, then `path`, then `*`. A bad pattern raises `ValueError` when the route is declared
+- Methods: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, `query` (the HTTP `QUERY` method); `app.on(["GET", "POST"], ["/a", "/ja/a"])` registers one handler for several methods and paths (a method may be any token, e.g. `"PURGE"`) and `app.all(path)` for every common one. Hono's chained form (`app.get(...).post(...)`) is not carried over: decorators return the handler, and `app.on` covers the case
+- Route patterns: a segment is a literal, `{name}` (any non-empty text), `{name:int|float|uuid|slug}`, `{rest:path}` (the rest of the path, last segment only), `{name:re:REGEX}` (Hono's `:name{regex}`; no capturing groups, must not match the empty string, and it may span `/` as in `{file:re:.+\.png}`), a lone `*` (any one non-empty segment, or the prefix and everything below it when last), or `prefix*` (a segment starting with `prefix`, possibly nothing more). A `*` elsewhere inside a segment is an ordinary character (Hono v5). A trailing `}?` makes the last segment optional (`/api/animal/{type}?` is `/api/animal` and `/api/animal/{type}`; `c.req.params` lacks `type` when it is left out). A value a converter rejects is a 404, not a 400. Priority at one position: literal, then fixed converters (`int`, `float`, `uuid`, `slug`), then `re:`, then `{name}`, then `path`, then `*`. A bad pattern raises `ValueError` when the route is declared
+- Groups: `app.route(prefix, sub)` mounts a sub-app; `app.base_path("/api")` returns a view of the same app whose routes, middleware and fallbacks sit below the prefix (Hono's `basePath`); `app.mount(prefix, asgi_app)` serves any other ASGI app below a prefix, answering before this app's routes and middleware
+- Routing on something other than the path: `App(get_path=fn)` (Hono's `getPath`, e.g. to route on the host)
+- WebSocket: `@app.ws("/chat/{room}")` registers `async def handler(ws: WebSocket)`; the handler calls `accept()`, then `receive_text/bytes/json`, `send_text/bytes/json`, `close()`, or iterates `async for message in ws`. Middleware does not run for WebSocket routes; a path with no handler is refused. `client.websocket(path)` drives it in tests
 - Trailing slash: strict by default (`/a/` is not `/a`); `App(strict=False)` treats them as one path, as in Hono
 - Router: paths without parameters are a dict lookup; the others are folded into a trie and compiled into one regular expression per method (Hono's RegExpRouter). Like Hono's SmartRouter, the first request tries the RegExpRouter and falls back to walking the trie only if building the expression raises `UnsupportedPathError`; with neither usable it fails loudly. `App(router=...)` takes any router factory. The fallback is a safety net, never a speed choice, and both paths share one test suite
 - Route metadata: decorators accept extra keyword options (e.g., `responses={...}`, `tool=True`) and store them in `app.route_table()`. The core never interprets them; plugins do
@@ -136,13 +139,18 @@ class Context:  # no type parameters
 
     def set[T](self, key: Key[T], value: T) -> None: ...
     def get[T](self, key: Key[T]) -> T: ...  # raises LookupError if the key was never set
-    def json[T](self, obj: T, status: int | None = None, headers: Mapping[str, str] | None = None) -> Json[T]: ...
+    def json[T](
+        self, obj: T, status: int | None = None, headers: Mapping[str, str] | None = None
+    ) -> Json[T]: ...
     def text(self, body: str, status: int | None = None, headers: ... = None) -> Response: ...
     def html(self, body: str, status: int | None = None, headers: ... = None) -> Response: ...
-    def body(self, data: str | bytes, status: int | None = None, headers: ... = None) -> Response: ...
+    def body(
+        self, data: str | bytes, status: int | None = None, headers: ... = None
+    ) -> Response: ...
     def status(self, code: int) -> None: ...  # the default status of the response built next
     def header(self, name: str, value: str | None, *, append: bool = False) -> None: ...
     def not_found(self) -> NoReturn: ...  # answered by the not_found steps (5.4)
+
     error: Exception | None  # the error being handled, inside on_error
     route: str | None  # the matched route template
 ```
@@ -201,7 +209,7 @@ app.not_found("/api/*", mark, answer)  # path first, then any number of steps
   - An exception raised inside a step goes to the built-in answer and never escapes the app
 - Not carried over from Hono v5: thrown non-Error values (Python raises only exceptions), `getColorEnabledAsync`, `app.fire`, `mount` (v2, 9.4). `c.json` on a value the codec cannot encode raises `TypeError`, as v5 does
 - `c.req.query()` and `c.req.queries()` without a name return every parameter (first value, and all values)
-- Known gap against v5: wildcards. honoka accepts only a trailing `*` segment; v5 also matches a lone `*` in the middle (`/wild/*/card`, one non-empty segment) and `x*` at the end of a segment (`/x*/y`)
+- Wildcards follow v5: a lone `*` in the middle is one non-empty segment, `x*` at the end of a segment may match nothing, and a `*` in the middle of a segment is a literal
 
 - Validation errors are short-circuited by the middleware with a structured 400 (before the handler runs)
 - All error responses use a machine-readable format (see below)
@@ -303,9 +311,10 @@ Selected from Hono's built-in set (basic-auth, bearer-auth, body-limit, cache, c
 | Tier | Middleware | Notes |
 |---|---|---|
 | v1 | `logger`, `request_id`, `cors`, `csrf`, `secure_headers`, `body_limit`, `timeout`, `timing`, `trailing_slash` | `csrf` follows Hono (Origin / `Sec-Fetch-Site` check for form-like content types). `body_limit` must be enforced while the body is read, so that an oversized body is rejected before it is all in memory. `timing` emits `Server-Timing`. 405/HEAD/OPTIONS handling is core behavior, not middleware |
-| v2 | `basic_auth`, `bearer_auth`, `jwt`/`jwk`, `ip_restriction`, `etag`/`cache`, `serve_static`, `combine` (some/every/except), `compress` (a reverse proxy is preferred), `mount` (with the ASGI adapter) | Authentication takes a user-supplied verifier and sets a typed key |
+| done | `basic_auth`, `bearer_auth`, `jwt` (HS256/384/512 only; `sign`/`verify`/`decode`), `ip_restriction`, `etag`, `serve_static`, `combine` (`some`/`every`/`except_`), `compress` (gzip/deflate), `method_override` (an ASGI wrapper, because routing happens before middleware), `pretty_json`, `powered_by`, `language`; `mount` is in the core | Authentication takes a user-supplied verifier and sets a typed key |
+| Not implemented | `jwk` and RS/ES/EdDSA JWT (need a crypto library), `cache` (the Workers Cache API: an adapter concern), brotli/zstd in `compress` | Add as separate packages when a dependency is acceptable |
 | v2 (agent-first) | `idempotency_key`, `rate_limit`, `api_key` | They need a store (in-memory by default, pluggable); idempotency must handle concurrent duplicates and payload mismatches |
-| Not adopted | `context_storage` (typed keys replace it), `jsx_renderer`, `language`, `method_override`, `powered_by`, `pretty_json` | Not needed for an API-first framework |
+| Not adopted | `context_storage` (typed keys replace it), `jsx_renderer` (no template DSL) | Not needed for an API-first framework |
 
 ### 9.5 Helpers
 
@@ -319,11 +328,13 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 | v1 (core) | route | `c.route` (the matched route template, e.g. `/users/{user_id}`), used by logger/metrics so that labels stay low-cardinality |
 | v1 (core) | html | `c.html(str)` (needed for the docs page; no template DSL) |
 | v1 (core) | file | `c.file(path, root=..., filename=...)`: read into memory for now (see 4.3). Pass `root` when `path` comes from a request, so `../` and absolute paths are a 404 |
-| v1 (core) | streaming | `c.stream(...)`, chunks sent as produced; the SSE helper `c.sse(...)` follows in v2 |
+| v1 (core) | streaming | `c.stream(...)`, `c.stream_text(...)`, and `c.sse(events)` (Server-Sent Events: a `str` or `SSEEvent(data, event, id, retry)` per event; names with line breaks are rejected), chunks sent as produced |
 | v1 (CLI) | dev | `honoka routes` prints `app.route_table()` (Hono's `showRoutes`) |
 | v0/v1 | testing | `app.test()` (see 12.3) |
-| v2 (separate packages) | signed cookies, JWT `sign`/`verify`/`decode` | Take a secret/key supplied by the user |
-| v3 | websocket | Formal design with WebSocket/SSE (see 12.1) |
+| v1 (core) | cookie extras | `c.cookie(..., expires, priority, partitioned, prefix="secure"\|"host")` with Hono's rules (400-day limit, `__Host-` needs path `/` and no domain), `c.signed_cookie(name, value, secret)` / `c.req.signed_cookie(name, secret)` (HMAC-SHA256; `False` when the signature fails), `generate_cookie(...)`, `c.req.cookie()` for all cookies, `c.delete_cookie(...)` returning the old value |
+| v1 (core) | request | `c.req.header()` / `c.req.cookie()` / `c.req.query()` / `c.req.queries()` without a name return everything; `c.req.url`, `c.req.text()`, `c.req.parse_body(all=, dot=)` (urlencoded and multipart, files as `UploadedFile`), `c.req.scope` (the raw ASGI scope, for adapters) |
+| v1 (core) | exception | `HTTPError(status, code, detail, response=Response(...))` carries its own response (Hono's `HTTPException` `res`); `err.get_response()` |
+| v1 (core) | websocket | `@app.ws(path)` over the ASGI websocket scope (5.1) |
 | Not adopted | factory | Decorators return the function unchanged and `Context` has no type parameters, so `Handler`, `Middleware`, and `Next` type aliases are enough |
 | Not adopted | adapter | One app object with two entries (4.3), not a per-platform adapter package |
 | Not adopted | css, ssg, proxy | Outside an API-first framework; a proxy needs an HTTP client dependency |

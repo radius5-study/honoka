@@ -2,23 +2,20 @@
 
 import mimetypes
 import os
-import re
-from collections.abc import AsyncIterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, NoReturn, cast
 from urllib.parse import quote
 
+from honoka.cookies import Prefix, Priority, SameSite, generate_cookie, sign
 from honoka.errors import HTTPError, NotFound
 from honoka.json import JsonCodec
 from honoka.response import FileResponse, Json, Response, Stream
+from honoka.sse import SSEEvent, format_event
 
 if TYPE_CHECKING:
     from honoka.request import Request
-
-
-_COOKIE_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
-_COOKIE_ATTR = re.compile(r"[\x21\x23-\x3a\x3c-\x7e]+")
-_COOKIE_VALUE = re.compile(r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*")
 
 
 class Key[T]:
@@ -185,33 +182,104 @@ class Context:
         value: str,
         *,
         max_age: int | None = None,
+        expires: datetime | None = None,
         path: str = "/",
         domain: str | None = None,
         secure: bool = False,
         http_only: bool = True,
-        same_site: Literal["Lax", "Strict", "None"] | None = "Lax",
+        same_site: SameSite | None = "Lax",
+        priority: Priority | None = None,
+        partitioned: bool = False,
+        prefix: Prefix | None = None,
     ) -> None:
         """Queue a Set-Cookie header. Defaults are safe: HttpOnly and SameSite=Lax."""
-        if not _COOKIE_NAME.fullmatch(name) or not _COOKIE_VALUE.fullmatch(value):
-            raise ValueError("cookie name or value contains characters that are not allowed")
-        if not _COOKIE_ATTR.fullmatch(path) or (
-            domain is not None and not _COOKIE_ATTR.fullmatch(domain)
-        ):
-            raise ValueError("cookie path or domain contains characters that are not allowed")
-        parts = [f"{name}={value}", f"Path={path}"]
-        if domain is not None:
-            parts.append(f"Domain={domain}")
-        if max_age is not None:
-            parts.append(f"Max-Age={max_age}")
-        if secure or same_site == "None":
-            parts.append("Secure")
-        if http_only:
-            parts.append("HttpOnly")
-        if same_site is not None:
-            parts.append(f"SameSite={same_site}")
+        header = generate_cookie(
+            name,
+            value,
+            max_age=max_age,
+            expires=expires,
+            path=path,
+            domain=domain,
+            secure=secure,
+            http_only=http_only,
+            same_site=same_site,
+            priority=priority,
+            partitioned=partitioned,
+            prefix=prefix,
+        )
         if self.set_cookies is None:
             self.set_cookies = []
-        self.set_cookies.append("; ".join(parts))
+        self.set_cookies.append(header)
 
-    def delete_cookie(self, name: str, *, path: str = "/", domain: str | None = None) -> None:
-        self.cookie(name, "", max_age=0, path=path, domain=domain)
+    def signed_cookie(
+        self,
+        name: str,
+        value: str,
+        secret: str,
+        *,
+        max_age: int | None = None,
+        expires: datetime | None = None,
+        path: str = "/",
+        domain: str | None = None,
+        secure: bool = False,
+        http_only: bool = True,
+        same_site: SameSite | None = "Lax",
+        priority: Priority | None = None,
+        partitioned: bool = False,
+        prefix: Prefix | None = None,
+    ) -> None:
+        """Like `cookie`, with an HMAC-SHA256 signature; read it with `c.req.signed_cookie`."""
+        self.cookie(
+            name,
+            sign(value, secret),
+            max_age=max_age,
+            expires=expires,
+            path=path,
+            domain=domain,
+            secure=secure,
+            http_only=http_only,
+            same_site=same_site,
+            priority=priority,
+            partitioned=partitioned,
+            prefix=prefix,
+        )
+
+    def delete_cookie(
+        self,
+        name: str,
+        *,
+        path: str = "/",
+        domain: str | None = None,
+        secure: bool = False,
+        prefix: Prefix | None = None,
+    ) -> str | None:
+        """Expire a cookie; returns the value the request had sent for it."""
+        sent = self.req.cookie(name, prefix=prefix)
+        self.cookie(name, "", max_age=0, path=path, domain=domain, secure=secure, prefix=prefix)
+        return sent
+
+    def sse(
+        self,
+        events: AsyncIterable[str | SSEEvent],
+        status: int | None = None,
+    ) -> Stream:
+        """A Server-Sent Events response. A plain `str` is sent as the data of one event."""
+
+        async def frames() -> AsyncIterator[bytes]:
+            async for event in events:
+                yield format_event(SSEEvent(event) if isinstance(event, str) else event)
+
+        headers = [
+            ("content-type", "text/event-stream"),
+            ("cache-control", "no-cache"),
+            ("x-accel-buffering", "no"),
+        ]
+        return Stream(frames(), self._status if status is None else status, headers)
+
+    def stream_text(self, chunks: AsyncIterable[str], status: int | None = None) -> Stream:
+        """Stream text chunks (`text/plain`), sent as they are produced."""
+        headers = [
+            ("content-type", "text/plain; charset=utf-8"),
+            ("x-content-type-options", "nosniff"),
+        ]
+        return Stream(chunks, self._status if status is None else status, headers)

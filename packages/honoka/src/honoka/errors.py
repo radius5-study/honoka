@@ -3,7 +3,7 @@
 import logging
 from typing import override
 
-from honoka.response import Json
+from honoka.response import Json, Response
 
 logger = logging.getLogger("honoka")
 
@@ -18,8 +18,10 @@ class HTTPError(Exception):
         detail: str | None = None,
         *,
         headers: list[tuple[str, str]] | None = None,
+        response: Response | None = None,
     ) -> None:
         super().__init__(code if detail is None else f"{code}: {detail}")
+        self.response = response
         self.status = status
         self.code = code
         self.detail = detail
@@ -30,6 +32,14 @@ class HTTPError(Exception):
         if self.detail is not None:
             body["detail"] = self.detail
         return body
+
+    def get_response(self) -> Response:
+        """The response this error stands for: `response` (with this status) if one was given,
+        else the machine-readable JSON body. Headers set on the Context are not included."""
+        if self.response is not None:
+            self.response.status = self.status
+            return self.response
+        return Json(self.body(), self.status, list(self.headers))
 
 
 class NotFound(HTTPError):
@@ -55,9 +65,9 @@ class ValidationFailed(HTTPError):
         return body
 
 
-def default_error_response(exc: Exception) -> Json[dict[str, object]]:
+def default_error_response(exc: Exception) -> Response:
     """The response honoka sends for `exc` unless the app installs its own `on_error`."""
     if isinstance(exc, HTTPError):
-        return Json(exc.body(), exc.status, list(exc.headers))
+        return exc.get_response()
     logger.error("unhandled error", exc_info=exc)
     return Json({"error": "internal_error"}, 500)

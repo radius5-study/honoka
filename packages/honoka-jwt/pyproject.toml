@@ -1,0 +1,18 @@
+[project]
+name = "honoka-jwt"
+version = "0.1.0"
+description = "JWT sign/verify/decode (HMAC) and an authentication middleware for honoka"
+authors = [
+    { name = "L4Ph", email = "me@l4ph.moe" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "honoka",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+honoka = { workspace = true }

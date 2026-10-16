@@ -52,10 +52,12 @@ class Fallbacks:
         self._matches = matches
         self._items: list[_Registration] = []
 
-    def add(self, args: tuple[str | Fallback, ...]) -> None:
+    def add(self, args: tuple[str | Fallback, ...], base: str = "") -> None:
         pattern = "*"
         if args and isinstance(args[0], str):
             pattern, args = args[0], args[1:]
+        if base:
+            pattern = base + "/*" if pattern in ("*", "/*") else base + pattern
         steps = tuple(_step(a) for a in args if not isinstance(a, str))
         if not steps:
             raise TypeError("expected at least one handler")

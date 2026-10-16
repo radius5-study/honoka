@@ -17,6 +17,9 @@ class HttpScope(TypedDict):
     query_string: bytes
     headers: Iterable[tuple[bytes, bytes]]
     client: NotRequired[tuple[str, int] | None]
+    scheme: NotRequired[str]
+    root_path: NotRequired[str]
+    server: NotRequired[tuple[str, int | None] | None]
 
 
 class Lifecycle(Protocol):

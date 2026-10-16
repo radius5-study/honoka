@@ -1,10 +1,12 @@
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from typing import cast, get_origin, overload
+from typing import Literal, cast, get_origin, overload
 from urllib.parse import parse_qsl
 
 from honoka.asgi import HttpScope, Receive
+from honoka.cookies import cookie_name, unsign
 from honoka.errors import HTTPError
+from honoka.forms import FormValue, Leaf, nest_dotted, parse_multipart
 from honoka.json import JsonCodec
 
 
@@ -16,6 +18,7 @@ class Request:
         "_cookies",
         "_headers",
         "_params",
+        "_path",
         "_query",
         "_receive",
         "_scope",
@@ -23,9 +26,15 @@ class Request:
     )
 
     def __init__(
-        self, scope: HttpScope, receive: Receive, params: Mapping[str, str], codec: JsonCodec
+        self,
+        scope: HttpScope,
+        receive: Receive,
+        params: Mapping[str, str],
+        codec: JsonCodec,
+        path: str,
     ) -> None:
         self._scope = scope
+        self._path = path
         self._receive = receive
         self._headers: dict[str, str] | None = None
         self._params = params
@@ -42,12 +51,42 @@ class Request:
 
     @property
     def path(self) -> str:
-        return self._scope["path"]
+        return self._path
 
-    def header(self, name: str) -> str | None:
+    @overload
+    def header(self, name: str) -> str | None: ...
+
+    @overload
+    def header(self) -> dict[str, str]: ...
+
+    def header(self, name: str | None = None) -> str | None | dict[str, str]:
+        """One request header (case-insensitive), or all of them with lowercase names."""
         if self._headers is None:
             self._headers = _index_headers(self._scope["headers"])
-        return self._headers.get(name.lower())
+        return dict(self._headers) if name is None else self._headers.get(name.lower())
+
+    @property
+    def scope(self) -> HttpScope:
+        """The raw ASGI scope, for adapters and middleware that need what honoka does not model."""
+        return self._scope
+
+    @property
+    def url(self) -> str:
+        """The full request URL, built from the scheme, the Host header and the path."""
+        host = self.header("host")
+        if host is None:
+            server = self._scope.get("server")
+            host = (
+                "localhost"
+                if not server
+                else f"{server[0]}:{server[1]}"
+                if server[1]
+                else server[0]
+            )
+        scheme = self._scope.get("scheme", "http")
+        root = self._scope.get("root_path", "")
+        query = self.query_string
+        return f"{scheme}://{host}{root}{self._path}{'?' + query if query else ''}"
 
     @overload
     def param(self, name: str) -> str: ...
@@ -135,10 +174,34 @@ class Request:
             self._query = grouped
         return self._query
 
-    def cookie(self, name: str) -> str | None:
+    @overload
+    def cookie(
+        self, name: str, *, prefix: Literal["secure", "host"] | None = None
+    ) -> str | None: ...
+
+    @overload
+    def cookie(self) -> dict[str, str]: ...
+
+    def cookie(
+        self, name: str | None = None, *, prefix: Literal["secure", "host"] | None = None
+    ) -> str | None | dict[str, str]:
+        """A cookie by name (with `prefix`, the `__Secure-`/`__Host-` form of it), or all."""
         if self._cookies is None:
             self._cookies = _parse_cookies(self.header("cookie") or "")
-        return self._cookies.get(name)
+        if name is None:
+            return dict(self._cookies)
+        return self._cookies.get(cookie_name(name, prefix))
+
+    def signed_cookie(
+        self, name: str, secret: str, *, prefix: Literal["secure", "host"] | None = None
+    ) -> str | Literal[False] | None:
+        """A cookie written by `Context.signed_cookie`: its value, `False` if the signature does
+        not verify, `None` if the cookie is absent."""
+        raw = self.cookie(name, prefix=prefix)
+        if raw is None:
+            return None
+        value = unsign(raw, secret)
+        return False if value is None else value
 
     def accepts(self, offers: Sequence[str]) -> str | None:
         """The best of `offers` for the Accept header; earlier offers win ties."""
@@ -173,6 +236,35 @@ class Request:
                     break
             self._body = bytes(received)
         return self._body
+
+    async def text(self) -> str:
+        return (await self.body()).decode()
+
+    async def parse_body(self, *, all: bool = False, dot: bool = False) -> dict[str, FormValue]:
+        """A form body (`application/x-www-form-urlencoded` or `multipart/form-data`) as a dict.
+
+        A repeated field keeps its last value, or all of them as a list with `all=True`. `dot=True`
+        turns `a.b=1` into `{"a": {"b": 1}}`. Any other content type gives `{}`."""
+        content_type = self.header("content-type") or ""
+        body = await self.body()
+        fields: list[tuple[str, Leaf]]
+        if content_type.startswith("application/x-www-form-urlencoded"):
+            fields = list(parse_qsl(body.decode(), keep_blank_values=True))
+        elif content_type.startswith("multipart/form-data"):
+            fields = parse_multipart(content_type, body)
+        else:
+            return {}
+        parsed: dict[str, FormValue] = {}
+        if all:
+            grouped: dict[str, list[Leaf]] = {}
+            for key, value in fields:
+                grouped.setdefault(key, []).append(value)
+            parsed.update(
+                {k: v if len(v) > 1 or k.endswith("[]") else v[0] for k, v in grouped.items()}
+            )
+        else:
+            parsed.update(fields)
+        return nest_dotted(parsed) if dot else parsed
 
     async def json(self) -> object:
         """The body decoded as JSON, typed `object` so callers must narrow it."""

@@ -193,7 +193,17 @@ def test_head_options_on_and_all_register_the_methods_they_name() -> None:
 
 @pytest.mark.parametrize(
     "pattern",
-    ["no-leading-slash", "/a/{x", "/a/{x:nope}", "/a/*/b", "/a/{p:path}/b", "/a/b*c", "/a/{}"],
+    [
+        "no-leading-slash",
+        "/a/{x",
+        "/a/{x:nope}",
+        "/a/{p:path}/b",
+        "/a/{}",
+        "/a/{x:re:(a)}",
+        "/a/{x:re:[}",
+        "/a/{x:re:a*}",
+        "/a/{x}?/b",
+    ],
 )
 def test_a_malformed_pattern_is_rejected_when_the_route_is_declared(pattern: str) -> None:
     app = App()
@@ -211,3 +221,84 @@ def test_sibling_literals_that_share_prefixes_each_keep_their_own_parameters() -
             assert client.get(f"/{literal}/one/7").text == "p=one,q=7", literal
         assert client.get("/abcd/one/7").status == 404
         assert client.get("/ab/one/seven").status == 404
+
+
+def test_a_lone_star_in_the_middle_is_one_non_empty_segment() -> None:
+    """Hono v5: `/wild/*/card` matches `/wild/x/card` but not `/wild//card` or two segments."""
+    app = App()
+    echo(app, "GET", "/wild/*/card")
+    with app.test() as client:
+        assert client.get("/wild/x/card").status == 200
+        assert client.get("/wild//card").status == 404
+        assert client.get("/wild/x/y/card").status == 404
+
+
+def test_a_star_ending_a_segment_matches_any_suffix_including_nothing() -> None:
+    app = App()
+    echo(app, "GET", "/img*/list")
+    with app.test() as client:
+        assert [client.get(f"/{p}/list").status for p in ("img", "img9", "imgs-big")] == [200] * 3
+        assert client.get("/im/list").status == 404
+        assert client.get("/img/x/list").status == 404
+
+
+def test_a_star_inside_a_segment_is_an_ordinary_character() -> None:
+    app = App()
+    echo(app, "GET", "/x*y")
+    with app.test() as client:
+        assert client.get("/x*y").status == 200
+        assert client.get("/xay").status == 404
+
+
+def test_an_optional_last_segment_matches_with_and_without_it() -> None:
+    app = App()
+    echo(app, "GET", "/api/animal/{type}?")
+
+    @app.get("/probe")
+    def probe(c: Context) -> Response:
+        return c.text("")
+
+    with app.test() as client:
+        assert client.get("/api/animal").status == 200
+        assert client.get("/api/animal/cat").status == 200
+        assert client.get("/api/animal/cat/extra").status == 404
+
+
+def test_an_optional_parameter_is_absent_from_params_when_left_out() -> None:
+    app = App()
+
+    @app.get("/files/{name:slug}?")
+    def files(c: Context) -> Response:
+        return c.text(c.req.params.get("name", "none"))
+
+    with app.test() as client:
+        assert client.get("/files").text == "none"
+        assert client.get("/files/a-b").text == "a-b"
+
+
+def test_a_regex_parameter_only_matches_what_the_expression_allows() -> None:
+    app = App()
+    echo(app, "GET", "/post/{date:re:[0-9]+}/{title:re:[a-z]+}", "date", "title")
+    with app.test() as client:
+        assert client.get("/post/20260102/hello").text == "date=20260102,title=hello"
+        assert client.get("/post/2026a/hello").status == 404
+        assert client.get("/post/1/HELLO").status == 404
+
+
+def test_a_regex_parameter_may_span_slashes() -> None:
+    app = App()
+    echo(app, "GET", "/posts/{filename:re:.+\\.png}", "filename")
+    with app.test() as client:
+        assert client.get("/posts/a/b/c.png").text == "filename=a/b/c.png"
+        assert client.get("/posts/a.jpg").status == 404
+
+
+def test_a_regex_parameter_ranks_between_fixed_converters_and_a_plain_one() -> None:
+    app = App()
+    echo(app, "GET", "/c/{n:int}", "n")
+    echo(app, "GET", "/c/{code:re:[A-Z]{3}}", "code")
+    echo(app, "GET", "/c/{any}", "any")
+    with app.test() as client:
+        assert client.get("/c/12").text == "n=12"
+        assert client.get("/c/ABC").text == "code=ABC"
+        assert client.get("/c/abc").text == "any=abc"

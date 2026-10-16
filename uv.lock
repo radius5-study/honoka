@@ -5,17 +5,29 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "honoka",
+    "honoka-basic-auth",
+    "honoka-bearer-auth",
     "honoka-benchmarks",
     "honoka-body-limit",
     "honoka-cli",
+    "honoka-combine",
+    "honoka-compress",
     "honoka-cors",
     "honoka-csrf",
+    "honoka-etag",
+    "honoka-ip-restriction",
+    "honoka-jwt",
+    "honoka-language",
     "honoka-llms",
     "honoka-logger",
+    "honoka-method-override",
     "honoka-msgspec",
     "honoka-openapi",
+    "honoka-powered-by",
+    "honoka-pretty-json",
     "honoka-request-id",
     "honoka-secure-headers",
+    "honoka-serve-static",
     "honoka-timeout",
     "honoka-timing",
     "honoka-trailing-slash",
@@ -323,6 +335,28 @@ version = "0.1.0"
 source = { editable = "packages/honoka" }
 
 [[package]]
+name = "honoka-basic-auth"
+version = "0.1.0"
+source = { editable = "packages/honoka-basic-auth" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-bearer-auth"
+version = "0.1.0"
+source = { editable = "packages/honoka-bearer-auth" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
 name = "honoka-benchmarks"
 version = "0.1.0"
 source = { editable = "benchmarks" }
@@ -380,6 +414,28 @@ dependencies = [
 requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
 
 [[package]]
+name = "honoka-combine"
+version = "0.1.0"
+source = { editable = "packages/honoka-combine" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-compress"
+version = "0.1.0"
+source = { editable = "packages/honoka-compress" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
 name = "honoka-cors"
 version = "0.1.0"
 source = { editable = "packages/honoka-cors" }
@@ -394,6 +450,50 @@ requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
 name = "honoka-csrf"
 version = "0.1.0"
 source = { editable = "packages/honoka-csrf" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-etag"
+version = "0.1.0"
+source = { editable = "packages/honoka-etag" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-ip-restriction"
+version = "0.1.0"
+source = { editable = "packages/honoka-ip-restriction" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-jwt"
+version = "0.1.0"
+source = { editable = "packages/honoka-jwt" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-language"
+version = "0.1.0"
+source = { editable = "packages/honoka-language" }
 dependencies = [
     { name = "honoka" },
 ]
@@ -440,6 +540,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "honoka-method-override"
+version = "0.1.0"
+source = { editable = "packages/honoka-method-override" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
 name = "honoka-msgspec"
 version = "0.1.0"
 source = { editable = "packages/honoka-msgspec" }
@@ -478,6 +589,28 @@ requires-dist = [
 dev = [{ name = "honoka-msgspec", editable = "packages/honoka-msgspec" }]
 
 [[package]]
+name = "honoka-powered-by"
+version = "0.1.0"
+source = { editable = "packages/honoka-powered-by" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-pretty-json"
+version = "0.1.0"
+source = { editable = "packages/honoka-pretty-json" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
 name = "honoka-request-id"
 version = "0.1.0"
 source = { editable = "packages/honoka-request-id" }
@@ -492,6 +625,17 @@ requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
 name = "honoka-secure-headers"
 version = "0.1.0"
 source = { editable = "packages/honoka-secure-headers" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-serve-static"
+version = "0.1.0"
+source = { editable = "packages/honoka-serve-static" }
 dependencies = [
     { name = "honoka" },
 ]

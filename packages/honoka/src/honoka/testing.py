@@ -2,14 +2,17 @@
 
 import asyncio
 import json as jsonlib
-from collections.abc import Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from types import TracebackType
 from typing import TYPE_CHECKING, Self, cast
+from urllib.parse import urlencode
 
 if TYPE_CHECKING:
     from honoka.app import App
 
-from honoka.asgi import AsgiMessage
+type AsgiApp = Callable[[AsgiScope, Receive, Send], Awaitable[None]]
+
+from honoka.asgi import AsgiMessage, AsgiScope, Receive, Send
 
 
 class ClientResponse:
@@ -31,7 +34,7 @@ class ClientResponse:
 
 
 async def asgi_call(
-    app: "App",
+    app: AsgiApp,
     method: str,
     path: str,
     *,
@@ -133,18 +136,31 @@ class Client:
         headers: Mapping[str, str] | None = None,
         json: object = None,
         content: bytes | None = None,
+        form: Mapping[str, str] | None = None,
     ) -> ClientResponse:
         raw_headers = [(k.lower(), v) for k, v in (headers or {}).items()]
         body = content or b""
         if json is not None:
             body = jsonlib.dumps(json).encode()
             raw_headers.append(("content-type", "application/json"))
+        if form is not None:
+            body = urlencode(form).encode()
+            raw_headers.append(("content-type", "application/x-www-form-urlencoded"))
         return self._run(
             asgi_call(self._app, method, path, headers=dict(raw_headers), content=body)
         )
 
     def get(self, path: str, *, headers: Mapping[str, str] | None = None) -> ClientResponse:
         return self.request("GET", path, headers=headers)
+
+    def head(self, path: str, *, headers: Mapping[str, str] | None = None) -> ClientResponse:
+        return self.request("HEAD", path, headers=headers)
+
+    def options(self, path: str, *, headers: Mapping[str, str] | None = None) -> ClientResponse:
+        return self.request("OPTIONS", path, headers=headers)
+
+    def delete(self, path: str, *, headers: Mapping[str, str] | None = None) -> ClientResponse:
+        return self.request("DELETE", path, headers=headers)
 
     def post(
         self,
@@ -153,5 +169,116 @@ class Client:
         headers: Mapping[str, str] | None = None,
         json: object = None,
         content: bytes | None = None,
+        form: Mapping[str, str] | None = None,
     ) -> ClientResponse:
-        return self.request("POST", path, headers=headers, json=json, content=content)
+        return self.request("POST", path, headers=headers, json=json, content=content, form=form)
+
+    def put(
+        self,
+        path: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        json: object = None,
+        content: bytes | None = None,
+    ) -> ClientResponse:
+        return self.request("PUT", path, headers=headers, json=json, content=content)
+
+    def patch(
+        self,
+        path: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        json: object = None,
+        content: bytes | None = None,
+    ) -> ClientResponse:
+        return self.request("PATCH", path, headers=headers, json=json, content=content)
+
+    def websocket(self, path: str, *, headers: Mapping[str, str] | None = None) -> "WebSocketTest":
+        """Open a WebSocket to the app: `with client.websocket("/chat") as ws: ws.send_text("hi")`."""
+        return WebSocketTest(self, path, headers or {})
+
+
+class WebSocketTest:
+    """The client end of a WebSocket, driven in process on the Client's event loop."""
+
+    def __init__(self, client: Client, path: str, headers: Mapping[str, str]) -> None:
+        target, _, query = path.partition("?")
+        self._client = client
+        self._to_app: asyncio.Queue[AsgiMessage] = asyncio.Queue()
+        self._from_app: asyncio.Queue[AsgiMessage] = asyncio.Queue()
+        self._scope: AsgiMessage = {
+            "type": "websocket",
+            "asgi": {"version": "3.0"},
+            "scheme": "ws",
+            "path": target,
+            "query_string": query.encode(),
+            "root_path": "",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+            "subprotocols": [],
+            "client": ("127.0.0.1", 50000),
+            "server": ("testserver", 80),
+        }
+        self._task: asyncio.Task[None] | None = None
+        self.accepted = False
+        self.close_code: int | None = None
+
+    def __enter__(self) -> Self:
+        async def start() -> None:
+            self._task = asyncio.create_task(
+                self._client._app(self._scope, self._to_app.get, self._from_app.put)
+            )
+            await self._to_app.put({"type": "websocket.connect"})
+
+        self._client._run(start())
+        first = self._client._run(self._from_app.get())
+        if first["type"] == "websocket.accept":
+            self.accepted = True
+        else:
+            self.close_code = cast(int, first.get("code", 1000))
+            self._client._run(self._finish())
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    async def _finish(self) -> None:
+        if self._task is not None:
+            await self._task
+            self._task = None
+
+    def send_text(self, data: str) -> None:
+        self._client._run(self._to_app.put({"type": "websocket.receive", "text": data}))
+
+    def send_bytes(self, data: bytes) -> None:
+        self._client._run(self._to_app.put({"type": "websocket.receive", "bytes": data}))
+
+    def send_json(self, data: object) -> None:
+        self.send_text(jsonlib.dumps(data))
+
+    def _receive(self) -> AsgiMessage:
+        message = self._client._run(self._from_app.get())
+        if message["type"] == "websocket.close":
+            self.close_code = cast(int, message.get("code", 1000))
+            self._client._run(self._finish())
+            raise AssertionError(f"the server closed the websocket with code {self.close_code}")
+        return message
+
+    def receive_text(self) -> str:
+        return cast(str, self._receive()["text"])
+
+    def receive_bytes(self) -> bytes:
+        return cast(bytes, self._receive()["bytes"])
+
+    def receive_json(self) -> object:
+        decoded: object = jsonlib.loads(self.receive_text())
+        return decoded
+
+    def close(self, code: int = 1000) -> None:
+        if self._task is not None:
+            self._client._run(self._to_app.put({"type": "websocket.disconnect", "code": code}))
+            self._client._run(self._finish())

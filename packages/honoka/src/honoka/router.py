@@ -40,20 +40,87 @@ CONVERTERS: dict[str, str] = {
     "slug": r"[A-Za-z0-9_-]+",
     "path": r".+",
 }
-# Most specific first: at one position `{id:int}` is tried before `{name}`.
+# Most specific first: at one position `{id:int}` is tried before `{name}`. A regex of your own
+# (`{code:re:[A-Z]{3}}`) sits between the fixed converters and plain `{name}`.
 _ORDER = {name: i for i, name in enumerate(("int", "float", "uuid", "slug", "str", "path"))}
+_REGEX_RANK = 3.5
 _NAME = re.compile(r"[A-Za-z_]\w*")
 _CONVERTER_RE = {name: re.compile(pattern) for name, pattern in CONVERTERS.items()}
-_TYPED = re.compile(r"\{(\w+):\w+\}")
+_REGEX_PREFIX = "re:"
+
+
+def _rank(converter: str) -> float:
+    return _REGEX_RANK if converter.startswith(_REGEX_PREFIX) else _ORDER[converter]
+
+
+def _converter_regex(converter: str) -> str:
+    """The regular expression text a converter stands for (its own text for `re:...`)."""
+    return (
+        converter[len(_REGEX_PREFIX) :]
+        if converter.startswith(_REGEX_PREFIX)
+        else (CONVERTERS[converter])
+    )
+
+
+_compiled_regexes: dict[str, re.Pattern[str]] = {}
+
+
+def _regex_of(converter: str) -> re.Pattern[str]:
+    found = _CONVERTER_RE.get(converter) or _compiled_regexes.get(converter)
+    if found is None:
+        found = _compiled_regexes[converter] = re.compile(_converter_regex(converter))
+    return found
 
 
 def split(path: str) -> list[str]:
     return path.split("/")[1:]
 
 
+def _split_pattern(pattern: str) -> list[str]:
+    """Split a route pattern on `/`, except inside `{...}` (a regex may contain a slash)."""
+    parts: list[str] = []
+    depth = 0
+    start = 1
+    for i, ch in enumerate(pattern):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(depth - 1, 0)
+        elif ch == "/" and depth == 0 and i >= start:
+            parts.append(pattern[start:i])
+            start = i + 1
+    parts.append(pattern[start:])
+    return parts
+
+
 def normalize(pattern: str) -> str:
-    """The pattern without converters: `/users/{id:int}` -> `/users/{id}`."""
-    return _TYPED.sub(r"{\1}", pattern)
+    """The pattern as documentation shows it: `/users/{id:int}` -> `/users/{id}`, `{code:re:..}`
+    -> `{code}`, an optional `{id}?` -> `{id}`; anonymous wildcards stay as they are."""
+    if not pattern.startswith("/"):
+        return pattern  # a middleware pattern such as "*"
+    out: list[str] = []
+    for part in _split_pattern(pattern):
+        part = part.removesuffix("?") if part.endswith("}?") else part
+        if part.startswith("{") and part.endswith("}"):
+            part = "{" + part[1:-1].partition(":")[0] + "}"
+        out.append(part)
+    return "/" + "/".join(out)
+
+
+def expand_optional(pattern: str) -> list[str]:
+    """`/a/{x}?` is two routes: `/a` and `/a/{x}`. Only the last segment may be optional."""
+    if not pattern.startswith("/"):
+        return [pattern]
+    parts = _split_pattern(pattern)
+    for part in parts[:-1]:
+        if part.endswith("}?"):
+            raise ValueError(
+                f"invalid route pattern {pattern!r}: only the last segment may be optional"
+            )
+    if not parts[-1].endswith("}?"):
+        return [pattern]
+    required = "/" + "/".join(parts[:-1])
+    return [required, f"{required.rstrip('/')}/{parts[-1][:-1]}"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,33 +131,46 @@ class Segment:
 
 
 def parse_pattern(pattern: str) -> list[Segment]:
-    """Split a route pattern into segments, rejecting anything the router cannot match."""
+    """Split a route pattern into segments, rejecting anything the router cannot match.
+
+    A segment is a literal, `{name}`, `{name:converter}`, `{name:re:REGEX}`, a lone `*` (any one
+    non-empty segment, or everything below when it is last) or `prefix*` (a segment starting with
+    `prefix`). A `*` elsewhere inside a segment is an ordinary character."""
 
     def invalid(why: str) -> ValueError:
         return ValueError(f"invalid route pattern {pattern!r}: {why}")
 
     if not pattern.startswith("/"):
         raise invalid("it must start with '/'")
-    parts = pattern.split("/")[1:]
+    parts = _split_pattern(pattern)
     segments: list[Segment] = []
     for i, part in enumerate(parts):
         last = i == len(parts) - 1
         if part == "*":
-            if not last:
-                raise invalid("'*' must be the last segment")
-            segments.append(Segment("wildcard", "*"))
+            segments.append(Segment("wildcard", "*") if last else Segment("param", "", "str"))
         elif part.startswith("{") and part.endswith("}"):
             name, _, converter = part[1:-1].partition(":")
             converter = converter or "str"
             if not _NAME.fullmatch(name):
                 raise invalid(f"{part!r} has no valid parameter name")
-            if converter not in CONVERTERS:
+            if converter.startswith(_REGEX_PREFIX):
+                try:
+                    compiled = re.compile(converter[len(_REGEX_PREFIX) :])
+                except re.error as exc:
+                    raise invalid(f"{part!r} is not a valid regular expression: {exc}") from exc
+                if compiled.groups:
+                    raise invalid(f"{part!r}: use (?:...) instead of capturing groups")
+                if compiled.fullmatch("") is not None:
+                    raise invalid(f"{part!r} must not match the empty string")
+            elif converter not in CONVERTERS:
                 raise invalid(f"unknown converter {converter!r}; use one of {sorted(CONVERTERS)}")
-            if converter == "path" and not last:
+            elif converter == "path" and not last:
                 raise invalid("a 'path' parameter must be the last segment")
             segments.append(Segment("param", name, converter))
-        elif any(ch in part for ch in "{}*"):
-            raise invalid(f"parameters and '*' must fill a whole segment, got {part!r}")
+        elif part.endswith("*") and "{" not in part and "}" not in part:
+            segments.append(Segment("param", "", _REGEX_PREFIX + re.escape(part[:-1]) + "[^/]*"))
+        elif "{" in part or "}" in part:
+            raise invalid(f"parameters must fill a whole segment, got {part!r}")
         else:
             segments.append(Segment("literal", part))
     return segments
@@ -98,7 +178,7 @@ def parse_pattern(pattern: str) -> list[Segment]:
 
 def path_params(pattern: str) -> list[tuple[str, str]]:
     """The (name, converter) of every parameter in `pattern`, in order."""
-    return [(s.text, s.converter) for s in parse_pattern(pattern) if s.kind == "param"]
+    return [(s.text, s.converter) for s in parse_pattern(pattern) if s.kind == "param" and s.text]
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,11 +281,12 @@ def _compile(root: _Node) -> _Compiled:
             # group numbers handed out here match their position in the final pattern.
             rendered = {lit: render(node.literals[lit], trail) for lit in sorted(node.literals)}
             alternatives.append("/" + _fold(rendered))
-        for key in sorted(node.params, key=lambda k: _ORDER[k[1]]):
+        for key in sorted(node.params, key=lambda k: _rank(k[1])):
             groups += 1
             number = groups
-            below = render(node.params[key], (*trail, (key[0], number)))
-            alternatives.append(f"/({CONVERTERS[key[1]]})" + below)
+            named = (*trail, (key[0], number)) if key[0] else trail
+            below = render(node.params[key], named)
+            alternatives.append(f"/({_converter_regex(key[1])})" + below)
         if node.wildcard is not None:
             alternatives.append("(?:/.*)?" + mark(node.wildcard, trail))
         return "(?:" + "|".join(alternatives) + ")"
@@ -232,7 +313,7 @@ def _regex_matcher(root: _Node) -> Matcher:
 
 
 def _prepare(node: _Node) -> None:
-    node.order = tuple(sorted(node.params, key=lambda k: _ORDER[k[1]]))
+    node.order = tuple(sorted(node.params, key=lambda k: _rank(k[1])))
     for child in (*node.literals.values(), *node.params.values()):
         _prepare(child)
 
@@ -255,16 +336,33 @@ def _walk(node: _Node, segments: list[str], i: int, params: dict[str, str]) -> R
                 params[name] = rest
                 return below.route
             continue
+        if converter.startswith(_REGEX_PREFIX):
+            # A regex may span several segments (`{file:re:.+\\.png}`): longest run first.
+            regex = _regex_of(converter)
+            for end in range(len(segments), i, -1):
+                piece = "/".join(segments[i:end])
+                if piece == "" or regex.fullmatch(piece) is None:
+                    continue
+                if name:
+                    params[name] = piece
+                found = _walk(below, segments, end, params)
+                if found is not None:
+                    return found
+                if name:
+                    del params[name]
+            continue
         if converter == "str":
             if segment == "":  # a segment never contains "/", so non-empty is all `str` needs
                 continue
         elif _CONVERTER_RE[converter].fullmatch(segment) is None:
             continue
-        params[name] = segment
+        if name:
+            params[name] = segment
         found = _walk(below, segments, i + 1, params)
         if found is not None:
             return found
-        del params[name]
+        if name:
+            del params[name]
     return node.wildcard
 
 
@@ -335,7 +433,10 @@ class _BaseRouter:
                 node = node.literals.setdefault(segment.text, _Node())
             elif segment.kind == "param":
                 key = (segment.text, segment.converter)
-                clash = next((n for n, c in node.params if c == key[1] and n != key[0]), None)
+                clash = next(
+                    (n for n, c in node.params if c == key[1] and n and key[0] and n != key[0]),
+                    None,
+                )
                 if clash is not None:
                     raise ValueError(
                         f"conflicting parameter names {clash!r} and {key[0]!r} in {route.pattern}"
