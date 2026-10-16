@@ -41,7 +41,7 @@ We will build a web framework that brings the philosophy of Hono (JS) — "a thi
 Client
    ↕ HTTP/1 and HTTP/2, WebSocket
 Granian (Rust: tokio + hyper)
-   ↕ RSGI (primary target) / ASGI (compatibility layer)
+   ↕ RSGI (fastest on Granian) / ASGI (Cloudflare Workers, any ASGI server)
 honoka core
    ├─ Routing (RegExpRouter style in pure Python: one compiled regex per method; Rust only if benchmarks justify it, see 12.2)
    ├─ Context (lazy binding)
@@ -69,9 +69,12 @@ async def rsgi_app(scope, proto):
 
 ### 4.3 ASGI adapter
 
-- Provided as a "works, but slow" compatibility layer. Converts via `Context.from_asgi(scope, receive, send)`
-- On the ASGI path the lazy-binding optimization has no effect (the input is already Python objects), but API compatibility is preserved
-- An on-ramp for adoption strategy. RSGI is recommended for production
+- v1, because the app must also run on Cloudflare Python Workers, which serve ASGI (`from workers import asgi; Default = asgi.entrypoint(app)`). The app object is itself the ASGI callable: `App.__call__(scope, receive, send)`
+- It feeds the same `Context`, handlers and middleware as RSGI; `honoka.asgi` only adapts scope, headers and body. The test client runs every request through either entry (`app.test(interface="asgi")`) and one suite asserts identical responses
+- Lifespan is handled; without a lifespan (Workers) startup hooks run lazily once, on the first request, under a lock. WebSocket scopes are closed with 1000 until v3
+- `NO_THREADS` (true on `emscripten`, i.e. Pyodide) makes plain `def` handlers run inline, since Workers has no threads. `c.file` reads the bytes there; there is no disk
+- Open: the Pyodide version Workers pins decides which msgspec the validator can use (Pyodide ships 0.19-0.20); verify before the first deploy
+- RSGI stays the faster path on Granian (measured equal to raw RSGI); ASGI costs one extra dict of scope per request
 
 ## 5. Core API
 
@@ -106,7 +109,7 @@ async def get_user(c: Context) -> Json[User]:
 - Methods: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`; `app.on(["GET", "POST"], path)` registers one handler for several methods and `app.all(path)` for every common one
 - Route patterns: a segment is a literal, `{name}` (any non-empty text), `{name:int|float|uuid|slug}`, `{rest:path}` (the rest of the path, last segment only), or a trailing `*` (the prefix itself and everything below it). A value a converter rejects is a 404, not a 400. Priority at one position: literal, then typed parameter (most specific first), then `{name}`, then `path`, then `*`. A bad pattern raises `ValueError` when the route is declared
 - Trailing slash: strict by default (`/a/` is not `/a`); `App(strict=False)` treats them as one path, as in Hono
-- Router: paths without parameters are a dict lookup; the others are folded into a trie and compiled into one regular expression per method (Hono's RegExpRouter). CPython sizes each match result by the number of capture groups, so past 100 parameterised routes per method the router walks the trie instead (Hono's SmartRouter makes the same trade). Both strategies must give identical answers and share one test suite
+- Router: paths without parameters are a dict lookup; the others are folded into a trie and compiled into one regular expression per method (Hono's RegExpRouter). Like Hono's SmartRouter, the first request tries the RegExpRouter and falls back to walking the trie only if building the expression raises `UnsupportedPathError`; with neither usable it fails loudly. `App(router=...)` takes any router factory. The fallback is a safety net, never a speed choice, and both paths share one test suite
 - Route metadata: decorators accept extra keyword options (e.g., `responses={...}`, `tool=True`) and store them in `app.route_table()`. The core never interprets them; plugins do
 
 ### 5.2 Context
@@ -290,7 +293,7 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 | v2 (separate packages) | signed cookies, JWT `sign`/`verify`/`decode` | Take a secret/key supplied by the user |
 | v3 | websocket | Formal design with WebSocket/SSE (see 12.1) |
 | Not adopted | factory | Decorators return the function unchanged and `Context` has no type parameters, so `Handler`, `Middleware`, and `Next` type aliases are enough |
-| Not adopted | adapter | Granian only; the ASGI adapter is a separate concern (4.3) |
+| Not adopted | adapter | One app object with two entries (4.3), not a per-platform adapter package |
 | Not adopted | css, ssg, proxy | Outside an API-first framework; a proxy needs an HTTP client dependency |
 
 ## 10. Package Layout
@@ -311,8 +314,8 @@ honoka-mcp        … MCP exposure (future)
   2. Verify `Key[T]`, `c.req.valid(T)`, and `Json[T]` in both checkers (`ok.py` / `bad.py`)
   3. Implement the lazy-binding Context on Granian/RSGI
   4. Build the benchmark harness (see 11.1) and a minimal implementation (static routing, `Json[T]` returns, a `Context` that can be constructed without RSGI); measure the cost of the Context abstraction against bare RSGI and the other frameworks
-- **v1**: Complete the core (middleware, error handling, synchronous handlers), honoka-msgspec, honoka-openapi (Scalar), honoka check, the v1 middleware packages of 9.4, a minimal `app.test()`
-- **v2**: ASGI adapter, the v2 middleware packages (authentication, idempotency, rate limiting, ...), full test client
+- **v1**: Complete the core (middleware, error handling, synchronous handlers), honoka-msgspec, honoka-openapi (Scalar), honoka check, the v1 middleware packages of 9.4, a minimal `app.test()`, the ASGI entry (4.3)
+- **v2**: the v2 middleware packages (authentication, idempotency, rate limiting, ...), full test client
 - **v3 and later**: Formal design of WebSocket/SSE, honoka-mcp
 
 ### 11.1 Benchmark policy
