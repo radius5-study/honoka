@@ -7,5 +7,21 @@ target-version = "py313"
 
 [dependency-groups]
 dev = [
+    "pyrefly>=1.4.0",
+    "pytest>=9.1.1",
     "ruff>=0.17.1",
+    "ty>=0.0.89",
 ]
+
+[tool.ty.src]
+exclude = ["packages/*/tests/typing/bad.py"]
+
+[tool.pyrefly]
+project-excludes = ["**/.venv/**", "packages/*/tests/typing/bad.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages"]
+addopts = "-ra"
+
+[tool.ruff.lint.isort]
+known-first-party = ["honoka", "honoka_msgspec", "honoka_middleware", "honoka_openapi"]
