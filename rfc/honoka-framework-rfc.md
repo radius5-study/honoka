@@ -204,7 +204,7 @@ Implementation approach:
 ## 7. OpenAPI and Documentation (honoka-openapi)
 
 - **Scalar is the default documentation UI** (Swagger UI is not used)
-- `app.docs()` serves `/docs` (Scalar) and `/openapi.json`
+- `docs(app, title=..., version=...)` from `honoka-openapi` serves `/docs` (Scalar) and `/openapi.json`. The document is built per request from `app.route_table()`, so later routes appear too. Scalar is loaded from a version-pinned CDN URL with a Subresource Integrity hash (self-hosting is a parameter). Route options `status=` and `responses={404: ErrorBody}` document the success status and error bodies; `openapi=False` hides a route
 - Collecting schema information is the plugin's responsibility: the `validator()` middleware holds the schema as metadata, and the OpenAPI plugin walks `app.route_table()` to gather it. The core is merely a carrier that does not interpret the contents
 - Response schemas come from the handler's return annotation (`Json[User]` → the 200 response schema), read with `typing.get_type_hints`. Error responses are declared with a route option (e.g., `responses={404: ErrorBody}`)
 - JSON Schema generation is **for documentation only** and is not used for runtime validation

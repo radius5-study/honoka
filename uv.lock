@@ -10,6 +10,7 @@ members = [
     "honoka-csrf",
     "honoka-logger",
     "honoka-msgspec",
+    "honoka-openapi",
     "honoka-request-id",
     "honoka-secure-headers",
     "honoka-timeout",
@@ -204,6 +205,29 @@ requires-dist = [
     { name = "honoka", editable = "packages/honoka" },
     { name = "msgspec", specifier = ">=0.22.0" },
 ]
+
+[[package]]
+name = "honoka-openapi"
+version = "0.1.0"
+source = { editable = "packages/honoka-openapi" }
+dependencies = [
+    { name = "honoka" },
+    { name = "msgspec" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "honoka-msgspec" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "honoka", editable = "packages/honoka" },
+    { name = "msgspec", specifier = ">=0.22.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "honoka-msgspec", editable = "packages/honoka-msgspec" }]
 
 [[package]]
 name = "honoka-request-id"
