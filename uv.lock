@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "honoka",
+    "honoka-msgspec",
 ]
 
 [manifest.dependency-groups]
@@ -131,12 +132,21 @@ wheels = [
 name = "honoka"
 version = "0.1.0"
 source = { editable = "packages/honoka" }
+
+[[package]]
+name = "honoka-msgspec"
+version = "0.1.0"
+source = { editable = "packages/honoka-msgspec" }
 dependencies = [
+    { name = "honoka" },
     { name = "msgspec" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "msgspec", specifier = ">=0.22.0" }]
+requires-dist = [
+    { name = "honoka", editable = "packages/honoka" },
+    { name = "msgspec", specifier = ">=0.22.0" },
+]
 
 [[package]]
 name = "httpcore"

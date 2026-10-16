@@ -29,7 +29,7 @@ We will build a web framework that brings the philosophy of Hono (JS) — "a thi
 1. **Context first**: Handlers take only a `Context` argument. This eliminates DI hell
 2. **No dicts at the boundary**: Keep RSGI's `scope` as a handle to the Rust-side object, and convert it to Python lazily on access (lazy binding)
 3. **Synchronous handlers are supported, and safe by default**: `def` handlers run in a worker thread so that blocking I/O cannot stall the event loop. Calling them inline on the loop (which rides on RSGI's `response_str`) is an explicit opt-in (`inline=True`), added only after the PoC benchmark shows it matters
-4. **Keep the core thin**: The core contains no schema validation, OpenAPI, or authentication. These are middleware/plugins; official middleware lives in `honoka-middleware` (see 9.4). The core depends on msgspec only for JSON encoding
+4. **Keep the core thin**: The core contains no schema validation, OpenAPI, or authentication. These are middleware/plugins; official middleware lives in `honoka-middleware` (see 9.4). The core has no third-party dependencies: JSON goes through a pluggable codec (`App(json_codec=...)`), which is the standard library by default and `MsgspecCodec` from honoka-msgspec for Structs
 5. **Validation is a single layer**: msgspec only. Do not split it across multiple layers (e.g., Rust-side validation), which would multiply the owners of "correctness". The core only converts scalar path/query parameters (`c.req.param(name, type)`); that is parsing, not schema validation
 6. **Standard type features only**: Do not rely on mypy plugins. Passing under the strictest settings of ty and Pyrefly is a design requirement
 7. **Agent-first**: No implicit context, startup-time checks for everything introspectable (duplicate routes, unused path parameters, missing type hints), `honoka check` in CI for the rest, machine-readable errors, and llms.txt
@@ -195,7 +195,7 @@ Implementation approach:
 
 - `validator()` is a middleware factory. Internally it validates in one shot with `msgspec.json.decode(raw, type=Schema)`
 - The validated object is stored on the Context with `c.set_validated("json", obj)` and retrieved by its type with `c.req.valid(T)` (`c.req.valid(T, target="query")` disambiguates when two targets share a type). The core provides only this intake point and does not validate anything itself
-- The core depends on msgspec only for JSON **encoding** (`c.json()` encodes Structs directly, without building dicts); validation stays in honoka-msgspec
+- The core has no third-party dependencies. `c.json()` encodes through the app's JSON codec: the standard library by default, or `MsgspecCodec` (`App(json_codec=MsgspecCodec())`), which encodes Structs directly without building dicts. Validation stays in honoka-msgspec
 - **Caveat about msgspec**: A Struct's constructor does not validate (only `decode`/`convert` do). We operate under the contract that "a body obtained via the framework is always validated"
 - Validation targets: `json` / `query` / `param` / `header` / `cookie` / `form`
 - Users who dislike msgspec can write their own version, such as a Pydantic one (the design is swappable)

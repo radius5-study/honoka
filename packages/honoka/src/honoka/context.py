@@ -53,6 +53,9 @@ class Context:
             return cast(T, self._provided[key])
         raise LookupError(f"key {key.name!r} was never set")
 
+    def set_validated(self, target: str, value: object) -> None:
+        self.req.set_valid(target, value)
+
     def json[T](self, obj: T, status: int = 200) -> Json[T]:
         return Json(obj, status, codec=self._codec)
 

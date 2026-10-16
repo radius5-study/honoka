@@ -1,6 +1,6 @@
 import math
 from collections.abc import Mapping, Sequence
-from typing import overload
+from typing import cast, get_origin, overload
 from urllib.parse import parse_qsl
 
 from honoka._rsgi import Proto, Scope
@@ -9,7 +9,7 @@ from honoka.json import JsonCodec
 
 
 class Request:
-    __slots__ = ("_body", "_codec", "_cookies", "_params", "_proto", "_query", "_scope")
+    __slots__ = ("_body", "_codec", "_cookies", "_params", "_proto", "_query", "_scope", "_valid")
 
     def __init__(
         self, scope: Scope, proto: Proto, params: Mapping[str, str], codec: JsonCodec
@@ -21,6 +21,7 @@ class Request:
         self._query: list[tuple[str, str]] | None = None
         self._cookies: dict[str, str] | None = None
         self._body: bytes | None = None
+        self._valid: dict[str, object] = {}
 
     @property
     def method(self) -> str:
@@ -60,6 +61,11 @@ class Request:
             raise HTTPError(
                 400, "invalid_parameter", f"path parameter {name!r} must be {kind.__name__}"
             ) from None
+
+    @property
+    def params(self) -> Mapping[str, str]:
+        """All path parameters, unconverted."""
+        return self._params
 
     @property
     def client(self) -> str:
@@ -103,6 +109,25 @@ class Request:
     async def json(self) -> object:
         """The body decoded as JSON, typed `object` so callers must narrow it."""
         return self._codec.decode(await self.body())
+
+    def set_valid(self, target: str, value: object) -> None:
+        """Store the object a validator produced for `target` (json, query, ...)."""
+        self._valid[target] = value
+
+    def valid[T](self, kind: type[T], target: str | None = None) -> T:
+        """The validated object of type `kind`. Pass `target` if two targets share the type."""
+        name = getattr(kind, "__name__", repr(kind))
+        if target is not None:
+            if target not in self._valid:
+                raise LookupError(f"this route did not validate {target!r}")
+            return cast(T, self._valid[target])
+        wanted = get_origin(kind) or kind
+        matches = [t for t, obj in self._valid.items() if isinstance(obj, wanted)]
+        if not matches:
+            raise LookupError(f"this route did not validate {name}")
+        if len(matches) > 1:
+            raise ValueError(f"{name} is ambiguous: validated for {matches}; pass target=")
+        return cast(T, self._valid[matches[0]])
 
 
 def _parse_cookies(header: str) -> dict[str, str]:

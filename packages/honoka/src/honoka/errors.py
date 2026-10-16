@@ -1,6 +1,7 @@
 """HTTP errors and their machine-readable rendering (RFC 9.2)."""
 
 import logging
+from typing import override
 
 from honoka.response import Json
 
@@ -28,6 +29,22 @@ class HTTPError(Exception):
         body: dict[str, object] = {"error": self.code}
         if self.detail is not None:
             body["detail"] = self.detail
+        return body
+
+
+class ValidationFailed(HTTPError):
+    """A request that did not match its schema. Raised by validators such as honoka-msgspec."""
+
+    def __init__(self, fields: list[dict[str, object]], schema: str | None = None) -> None:
+        super().__init__(400, "validation_failed")
+        self.fields = fields
+        self.schema = schema
+
+    @override
+    def body(self) -> dict[str, object]:
+        body: dict[str, object] = {"error": self.code, "fields": self.fields}
+        if self.schema is not None:
+            body["schema"] = self.schema
         return body
 
 
