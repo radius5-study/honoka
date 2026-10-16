@@ -6,15 +6,18 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, cast
 
 from honoka._rsgi import Proto, Scope
-from honoka.context import Context
+from honoka.context import Context, Key
 from honoka.errors import HTTPError, default_error_response
 from honoka.request import Request
-from honoka.response import Response
+from honoka.response import Response, Stream
 from honoka.router import NO_PARAMS, Chain, Route, RouteInfo, Router, split
 from honoka.types import Handler, Middleware, Next
 
 if TYPE_CHECKING:
     from honoka.testing import Client
+
+
+type Hook = Callable[[], Awaitable[None] | None]
 
 
 class _Next:
@@ -37,6 +40,12 @@ def _is_async(fn: object) -> bool:
     )
 
 
+async def _run_hook(hook: Hook) -> None:
+    result = hook()
+    if result is not None:
+        await result
+
+
 def _matches(pattern: str, target: str) -> bool:
     """Whether the middleware `pattern` (`/api/*`, `/admin`, `*`) applies to `target`."""
     if pattern in ("*", "/*"):
@@ -56,6 +65,9 @@ class App:
         self._provided: dict[object, object] = {}
         self._router: Router | None = None
         self._seen: set[tuple[str, str]] = set()
+        self._startup: list[Hook] = []
+        self._shutdown: list[Hook] = []
+        self._started = False
 
     # -- registration -------------------------------------------------------------------------
 
@@ -68,17 +80,67 @@ class App:
         meta: Mapping[str, object],
     ) -> Callable[[H], H]:
         def decorator(handler: H) -> H:
-            if (method, path) in self._seen:
-                raise ValueError(f"duplicate route: {method} {path}")
-            for mw in middleware:
-                if not _is_async(mw):
-                    raise TypeError(f"middleware {mw!r} must be an async function")
-            self._seen.add((method, path))
-            self._routes.append(Route(method, path, handler, middleware, inline, dict(meta)))
-            self._router = None
+            self._add(Route(method, path, handler, middleware, inline, dict(meta)))
             return handler
 
         return decorator
+
+    def _add(self, route: Route) -> None:
+        if (route.method, route.pattern) in self._seen:
+            raise ValueError(f"duplicate route: {route.method} {route.pattern}")
+        for mw in route.middleware:
+            if not _is_async(mw):
+                raise TypeError(f"middleware {mw!r} must be an async function")
+        self._seen.add((route.method, route.pattern))
+        self._routes.append(route)
+        self._router = None
+
+    def route(self, prefix: str, sub: "App") -> None:
+        """Mount `sub` under `prefix`. Its middleware applies only below the prefix; its
+        `on_error`/`not_found` handlers are ignored (the parent app owns them)."""
+        prefix = prefix.rstrip("/")
+        for r in sub._routes:
+            pattern = prefix if r.pattern == "/" else prefix + r.pattern
+            self._add(Route(r.method, pattern, r.handler, r.middleware, r.inline, r.meta))
+        for pattern, mw in sub._middlewares:
+            self._middlewares.append(
+                (prefix + "/*" if pattern in ("*", "/*") else prefix + pattern, mw)
+            )
+        self._router = None
+
+    def on_startup[F: Hook](self, hook: F) -> F:
+        self._startup.append(hook)
+        return hook
+
+    def on_shutdown[F: Hook](self, hook: F) -> F:
+        self._shutdown.append(hook)
+        return hook
+
+    def provide[T](self, key: Key[T], value: T) -> None:
+        """Publish an app-wide value, read by handlers with `c.get(key)`."""
+        self._provided[key] = value
+
+    async def start(self) -> None:
+        """Run startup hooks once. The server calls this; tests use `app.test()`."""
+        if self._started:
+            return
+        self.finalize()
+        for hook in self._startup:
+            await _run_hook(hook)
+        self._started = True
+
+    async def stop(self) -> None:
+        if not self._started:
+            return
+        self._started = False
+        for hook in reversed(self._shutdown):
+            await _run_hook(hook)
+
+    def __rsgi_init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        loop.run_until_complete(self.start())
+
+    def __rsgi_del__(self, loop: asyncio.AbstractEventLoop) -> None:
+        loop.run_until_complete(self.stop())
 
     def get[H: Handler](
         self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
@@ -233,10 +295,19 @@ class App:
         response = await chain(c)
         if head:
             response.body = b""
-        if response.body:
+        response.headers.extend(("set-cookie", v) for v in c.set_cookies)
+        if isinstance(response, Stream) and not head:
+            await self._send_stream(proto, response)
+        elif response.body and not isinstance(response, Stream):
             proto.response_bytes(response.status, response.headers, response.body)
         else:
             proto.response_empty(response.status, response.headers)
+
+    @staticmethod
+    async def _send_stream(proto: Proto, response: Stream) -> None:
+        transport = proto.response_stream(response.status, response.headers)
+        async for chunk in response.chunks:
+            await transport.send_bytes(chunk.encode() if isinstance(chunk, str) else chunk)
 
     async def __call__(self, scope: Scope, proto: Proto) -> None:
         await self.__rsgi__(scope, proto)

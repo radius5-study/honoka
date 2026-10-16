@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 # 04: Request helpers, lifecycle, groups, streaming

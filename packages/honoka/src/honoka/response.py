@@ -1,5 +1,7 @@
 """Responses. `Json[T]` keeps the original object so the body type survives into annotations."""
 
+from collections.abc import AsyncIterable
+
 import msgspec
 
 
@@ -32,3 +34,18 @@ class Json[T](Response):
     @property
     def data(self) -> T:
         return self._data
+
+
+class Stream(Response):
+    """A response whose body is produced chunk by chunk (`str` chunks are encoded as UTF-8)."""
+
+    __slots__ = ("chunks",)
+
+    def __init__(
+        self,
+        chunks: AsyncIterable[str | bytes],
+        status: int = 200,
+        headers: list[tuple[str, str]] | None = None,
+    ) -> None:
+        super().__init__(b"", status, headers)
+        self.chunks = chunks

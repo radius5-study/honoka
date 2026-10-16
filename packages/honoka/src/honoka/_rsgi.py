@@ -27,6 +27,10 @@ class Scope(Protocol):
     def client(self) -> str: ...
 
 
+class StreamTransport(Protocol):
+    async def send_bytes(self, data: bytes, /) -> None: ...
+
+
 class Proto(Protocol):
     async def __call__(self) -> bytes: ...
 
@@ -35,3 +39,7 @@ class Proto(Protocol):
     def response_bytes(
         self, status: int, headers: list[tuple[str, str]], body: bytes, /
     ) -> None: ...
+
+    def response_stream(
+        self, status: int, headers: list[tuple[str, str]], /
+    ) -> StreamTransport: ...
