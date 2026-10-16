@@ -9,7 +9,7 @@ Refs: RFC (rfc/honoka-framework-rfc.md), .scratch/v1/spec.md
 
 ## Outcome (2026-10-17)
 
-Harness, nine conforming apps (incl. raw-rsgi and raw-asgi), a multi-process load generator,
+Harness, eight conforming apps (incl. raw-asgi), a multi-process load generator,
 README output and an in-process profiler are done. Throughput on the author's laptop varied up to
 3x between identical runs, so no baseline or budget was recorded and the `call_next()` question is
 left open. Revisit on a quiet dedicated machine; use `python -m honoka_benchmarks.profile` for

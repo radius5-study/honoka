@@ -61,7 +61,7 @@ Raw numbers of every run are kept in `results/*.json`.
 
 ## Latest results
 
-> The results below were measured before honoka dropped RSGI: honoka ran as an RSGI app and was compared with `raw-rsgi`. Run the suite again to get ASGI-only numbers.
+> The honoka numbers below were measured when honoka still ran as an RSGI app; run the suite again for ASGI-only numbers. The honoka share-of-baseline row is gone because its baseline was `raw-rsgi`.
 
 <!-- benchmark-results:start -->
 Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
@@ -70,13 +70,12 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 - Python 3.13.12, Granian 2.8.4
 - Server: Granian, 1 worker processes (Robyn: 1 processes)
 - Load: 64 keep-alive connections from 2 client processes, 5s warm-up + 20s measured, closed loop; median of 3 passes with the framework order rotated each pass
-- Versions: raw-rsgi 2.8.4, raw-asgi 2.8.4, honoka 0.1.0, starlette 1.8.0, fastapi 0.143.3, litestar 2.24.0, falcon 4.4.0, blacksheep 2.6.4, robyn 0.88.0
+- Versions: raw-asgi 2.8.4, honoka 0.1.0, starlette 1.8.0, fastapi 0.143.3, litestar 2.24.0, falcon 4.4.0, blacksheep 2.6.4, robyn 0.88.0
 
 ### Requests per second (higher is better)
 
 | framework | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| raw-rsgi | 7,235 | 4,063 | 11,428 |
 | raw-asgi | 7,132 | 3,842 | 7,377 |
 | honoka | 4,422 | 3,660 | 12,130 |
 | starlette | 4,860 | 2,425 | 7,729 |
@@ -90,7 +89,6 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 
 | framework (vs its raw baseline) | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| honoka (vs raw-rsgi) | 61% | 90% | 106% |
 | starlette (vs raw-asgi) | 68% | 63% | 105% |
 | fastapi (vs raw-asgi) | 34% | 54% | 44% |
 | litestar (vs raw-asgi) | 101% | 118% | 91% |
@@ -101,7 +99,6 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 
 | framework | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| raw-rsgi | 17.7 | 25.4 | 7.8 |
 | raw-asgi | 19.8 | 37.7 | 21.5 |
 | honoka | 43.9 | 26.8 | 7.9 |
 | starlette | 30.4 | 39.7 | 15.0 |
@@ -115,7 +112,6 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 
 | framework | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| raw-rsgi | 8.6 | 14.9 | 5.7 |
 | raw-asgi | 8.5 | 15.2 | 7.0 |
 | honoka | 10.4 | 17.0 | 5.2 |
 | starlette | 12.4 | 25.5 | 7.9 |
@@ -129,7 +125,6 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 
 | framework | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| raw-rsgi | 0.202 | 0.328 | 0.084 |
 | raw-asgi | 0.208 | 0.333 | 0.133 |
 | honoka | 0.305 | 0.393 | 0.115 |
 | starlette | 0.314 | 0.567 | 0.153 |
@@ -143,7 +138,6 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 
 | framework | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| raw-rsgi | 93 | 93 | 93 |
 | raw-asgi | 93 | 93 | 93 |
 | honoka | 98 | 97 | 97 |
 | starlette | 96 | 96 | 96 |
@@ -157,7 +151,6 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 
 | framework | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| raw-rsgi | 2.21x | 1.24x | 1.09x |
 | raw-asgi | 1.05x | 1.24x | 1.39x |
 | honoka | 1.90x | 1.36x | 1.14x |
 | starlette | 2.92x | 1.33x | 1.25x |
@@ -171,7 +164,6 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 
 | framework | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| raw-rsgi | 0 | 0 | 0 |
 | raw-asgi | 0 | 0 | 0 |
 | honoka | 0 | 0 | 0 |
 | starlette | 0 | 0 | 0 |
@@ -185,7 +177,6 @@ Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.
 
 | framework | mixed | list-heavy | write-heavy |
 |---|---:|---:|---:|
-| raw-rsgi | 23 | 14 | 26 |
 | raw-asgi | 26 | 13 | 27 |
 | honoka | 19 | 13 | 31 |
 | starlette | 17 | 10 | 22 |
