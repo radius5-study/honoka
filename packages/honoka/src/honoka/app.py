@@ -2,10 +2,12 @@
 
 import asyncio
 import inspect
+import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
 
 from honoka._rsgi import Proto, Scope
+from honoka.asgi import AsgiProto, AsgiScope, HttpScope, Receive, Send, run_lifespan
 from honoka.context import Context, Key
 from honoka.errors import HTTPError, default_error_response
 from honoka.json import STDLIB_JSON, JsonCodec
@@ -16,7 +18,9 @@ from honoka.router import (
     Chain,
     Route,
     RouteInfo,
-    Router,
+    RouterFactory,
+    RouterLike,
+    SmartRouter,
     normalize,
     parse_pattern,
     split,
@@ -28,6 +32,12 @@ if TYPE_CHECKING:
 
 
 type Hook = Callable[[], Awaitable[None] | None]
+
+# Pyodide (Cloudflare Python Workers) cannot start threads: `def` handlers must run inline there.
+NO_THREADS = sys.platform == "emscripten"
+
+# The router every App uses unless it is given `router=`; tests swap it to run on each router.
+DEFAULT_ROUTER: RouterFactory = SmartRouter
 
 ALL_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 
@@ -70,20 +80,29 @@ def _matches(pattern: str, target: str) -> bool:
 
 
 class App:
-    def __init__(self, *, json_codec: JsonCodec = STDLIB_JSON, strict: bool = True) -> None:
-        """`strict=False` makes `/a` and `/a/` the same path (Hono's `strict` option)."""
+    def __init__(
+        self,
+        *,
+        json_codec: JsonCodec = STDLIB_JSON,
+        strict: bool = True,
+        router: RouterFactory | None = None,
+    ) -> None:
+        """`strict=False` makes `/a` and `/a/` the same path (Hono's `strict` option). `router`
+        picks the matching strategy: `SmartRouter` (default), `RegExpRouter` or `TrieRouter`."""
         self._codec = json_codec
         self._strict = strict
+        self._router_factory = DEFAULT_ROUTER if router is None else router
         self._routes: list[Route] = []
         self._middlewares: list[tuple[str, Middleware]] = []
         self._on_error: Handler | None = None
         self._not_found: Handler | None = None
         self._provided: dict[object, object] = {}
-        self._router: Router | None = None
+        self._router: RouterLike | None = None
         self._seen: set[tuple[str, str]] = set()
         self._startup: list[Hook] = []
         self._shutdown: list[Hook] = []
         self._started = False
+        self._start_lock: asyncio.Lock | None = None
 
     # -- registration -------------------------------------------------------------------------
 
@@ -246,10 +265,11 @@ class App:
         """Compile routes now, so registration mistakes surface at startup, not on a request."""
         self._compile()
 
-    def test(self) -> "Client":
+    def test(self, interface: str = "rsgi") -> "Client":
+        """A synchronous test client. `interface=\"asgi\"` drives the app through its ASGI entry."""
         from honoka.testing import Client
 
-        return Client(self)
+        return Client(self, interface=interface)
 
     # -- compilation --------------------------------------------------------------------------
 
@@ -284,7 +304,7 @@ class App:
         if _is_async(handler):
             # An `async def` handler already is `(Context) -> Awaitable[Response]`.
             return cast("Chain", handler)
-        if inline:
+        if inline or NO_THREADS:
 
             async def run_inline(c: Context) -> Response:
                 result = handler(c)
@@ -318,8 +338,8 @@ class App:
 
         return run
 
-    def _compile(self) -> Router:
-        router = Router(strict=self._strict)
+    def _compile(self) -> RouterLike:
+        router = self._router_factory(strict=self._strict)
         for route in self._routes:
             applicable = [
                 mw for pattern, mw in self._middlewares if _matches(pattern, route.pattern)
@@ -376,8 +396,28 @@ class App:
         async for chunk in response.chunks:
             await transport.send_bytes(chunk.encode() if isinstance(chunk, str) else chunk)
 
-    async def __call__(self, scope: Scope, proto: Proto) -> None:
-        await self.__rsgi__(scope, proto)
+    async def __call__(self, scope: AsgiScope, receive: Receive, send: Send) -> None:
+        """The ASGI entry: lets uvicorn, Cloudflare Python Workers (`asgi.entrypoint(app)`) and any
+        other ASGI host serve this app. Granian's RSGI uses `__rsgi__` instead."""
+        kind = scope["type"]
+        if kind == "http":
+            if not self._started:
+                await self._ensure_started()
+            proto = AsgiProto(receive, send)
+            await self.__rsgi__(HttpScope(scope), proto)
+            await proto.finish()
+        elif kind == "lifespan":
+            await run_lifespan(self, receive, send)
+        elif kind == "websocket":  # not supported yet: refuse the handshake politely
+            await receive()
+            await send({"type": "websocket.close", "code": 1000})
+
+    async def _ensure_started(self) -> None:
+        """Hosts without a lifespan (Workers) never announce startup: do it on the first request."""
+        if self._start_lock is None:
+            self._start_lock = asyncio.Lock()
+        async with self._start_lock:
+            await self.start()
 
     async def _unmatched(self, c: Context) -> Response:
         allowed = self._router.allowed_methods(c.req.path) if self._router else []

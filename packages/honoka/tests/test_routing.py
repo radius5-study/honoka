@@ -1,16 +1,32 @@
 """Path patterns, route priority and the HTTP method decorators, via the public test client."""
 
+import re
+
 import pytest
 
 from honoka import App, Context, Response, router
+from honoka import app as app_module
 
 
-@pytest.fixture(autouse=True, params=["regex", "trie"])
+@pytest.fixture(
+    autouse=True,
+    params=["RegExpRouter", "TrieRouter", "SmartRouter", "SmartRouter without RegExpRouter"],
+)
 def strategy(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Every routing behavior must hold whichever way the router matches (see REGEX_ROUTE_LIMIT)."""
-    limit = router.REGEX_ROUTE_LIMIT if request.param == "regex" else 0
-    monkeypatch.setattr(router, "REGEX_ROUTE_LIMIT", limit)
-    return str(request.param)
+    """Every routing behavior must hold on each router, and on the SmartRouter in both outcomes:
+    keeping the RegExpRouter, and falling back to the TrieRouter when it cannot be built."""
+    name = str(request.param)
+    if name == "RegExpRouter":
+        monkeypatch.setattr(app_module, "DEFAULT_ROUTER", router.RegExpRouter)
+    elif name == "TrieRouter":
+        monkeypatch.setattr(app_module, "DEFAULT_ROUTER", router.TrieRouter)
+    elif name == "SmartRouter without RegExpRouter":
+
+        def refuse(root: object) -> object:
+            raise re.error("simulated: the pattern is too large")
+
+        monkeypatch.setattr(router, "_regex_matcher", refuse)
+    return name
 
 
 def echo(app: App, method: str, pattern: str, *names: str) -> None:

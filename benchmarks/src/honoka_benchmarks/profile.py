@@ -80,7 +80,7 @@ def main() -> None:
     async def drive(count: int) -> None:
         for i in range(count):
             method, path, query, headers, body = pool[i % len(pool)]
-            await app(_Scope(method, path, query, headers), _Proto(body))
+            await app.__rsgi__(_Scope(method, path, query, headers), _Proto(body))
 
     from honoka_benchmarks import shop
 

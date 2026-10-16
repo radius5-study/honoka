@@ -1,20 +1,24 @@
-"""Method-aware path matching, in the style of Hono's RegExpRouter.
+"""Routers, modelled on Hono's: `RegExpRouter`, `TrieRouter` and the `SmartRouter` that picks one.
 
-Paths without parameters are a dict lookup. For the rest, a method's routes are folded into a trie
-and rendered as one regular expression, so a request is matched by a single C-level `fullmatch`
-instead of a Python loop. Alternatives run from the most to the least specific, and the regex
-engine's backtracking gives the same priority a hand-written matcher would.
+Paths without parameters are a dict lookup in every router. The rest go into a trie per method,
+which the routers match differently:
 
-CPython sizes every match result by the number of capturing groups, so one huge expression slows
-every request down. Past `REGEX_ROUTE_LIMIT` routes a method is matched by walking the trie
-instead, whose cost does not depend on how many routes there are (Hono's SmartRouter makes the
-same trade). Both paths must give identical answers; the routing tests run under each."""
+- `RegExpRouter` renders the trie as one regular expression, so a request is matched by a single
+  C-level `fullmatch`. Alternatives run from the most to the least specific and the regex engine's
+  backtracking gives the priority.
+- `TrieRouter` walks the trie in Python.
+- `SmartRouter` (the default) tries its routers in order, `RegExpRouter` then `TrieRouter`, and
+  keeps the first that accepts the whole set of routes. A router signals "cannot take this set" by
+  raising `UnsupportedPathError`; any other error is a real mistake and propagates. As in Hono the
+  choice is about what a router can express, never about speed.
+
+All routers must give identical answers; the routing tests run against each of them."""
 
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import cast
+from typing import Protocol, cast, override
 
 from honoka.context import Context
 from honoka.response import Response
@@ -23,8 +27,6 @@ from honoka.types import Handler, Middleware
 type Chain = Callable[[Context], Awaitable[Response]]
 type Matcher = Callable[[str], tuple[Route, Mapping[str, str]] | None]
 
-# Above this many parameterised routes for one method the trie walk beats the regex.
-REGEX_ROUTE_LIMIT = 100
 
 NO_PARAMS: Mapping[str, str] = MappingProxyType(dict[str, str]())
 
@@ -277,13 +279,40 @@ def _trie_matcher(root: _Node) -> Matcher:
     return match
 
 
-class Router:
+class UnsupportedPathError(Exception):
+    """A router cannot take this set of routes. `SmartRouter` then tries the next router."""
+
+
+class RouterLike(Protocol):
+    name: str
+
+    def add(self, route: Route) -> None: ...
+
+    def compile(self) -> None: ...
+
+    def match(self, method: str, path: str) -> tuple[Route, Mapping[str, str]] | None: ...
+
+    def allowed_methods(self, path: str) -> list[str]: ...
+
+
+class RouterFactory(Protocol):
+    def __call__(self, *, strict: bool = True) -> RouterLike: ...
+
+
+class _BaseRouter:
+    """What `RegExpRouter` and `TrieRouter` share: parsing, the static dict and the trie. A
+    subclass only decides how a method's trie is matched."""
+
+    name = "BaseRouter"
+
     def __init__(self, *, strict: bool = True) -> None:
         self._strict = strict
         self._static: dict[tuple[str, str], Route] = {}
         self._tries: dict[str, _Node] = {}
-        self._counts: dict[str, int] = {}
         self._matchers: dict[str, Matcher] = {}
+
+    def _build(self, root: _Node) -> Matcher:
+        raise NotImplementedError
 
     def _canonical(self, pattern: str) -> str:
         """Without `strict`, `/a/` and `/a` are one route."""
@@ -301,7 +330,6 @@ class Router:
             return
         node = self._tries.setdefault(route.method, _Node())
         self._matchers.pop(route.method, None)
-        self._counts[route.method] = self._counts.get(route.method, 0) + 1
         for segment in segments:
             if segment.kind == "literal":
                 node = node.literals.setdefault(segment.text, _Node())
@@ -328,14 +356,11 @@ class Router:
             root = self._tries.get(method)
             if root is None:
                 return None
-            use_regex = self._counts[method] <= REGEX_ROUTE_LIMIT
-            matcher = self._matchers[method] = (
-                _regex_matcher(root) if use_regex else _trie_matcher(root)
-            )
+            matcher = self._matchers[method] = self._build(root)
         return matcher
 
     def compile(self) -> None:
-        """Build every method's matcher now instead of on the first request."""
+        """Build every method's matcher now, so an unsupported route set fails here."""
         for method in self._tries:
             self._matcher(method)
 
@@ -354,3 +379,79 @@ class Router:
         if "GET" in allowed:
             allowed.add("HEAD")
         return sorted(allowed)
+
+
+class TrieRouter(_BaseRouter):
+    name = "TrieRouter"
+
+    @override
+    def _build(self, root: _Node) -> Matcher:
+        return _trie_matcher(root)
+
+
+class RegExpRouter(_BaseRouter):
+    name = "RegExpRouter"
+
+    @override
+    def _build(self, root: _Node) -> Matcher:
+        try:
+            return _regex_matcher(root)
+        except (re.error, RecursionError, OverflowError) as exc:
+            raise UnsupportedPathError(str(exc)) from exc
+
+
+class SmartRouter:
+    """Tries `routers` in order and keeps the first that accepts every route (Hono's SmartRouter).
+
+    Routes are buffered until `compile()`: each candidate gets all of them, and one that raises
+    `UnsupportedPathError` is dropped for the next."""
+
+    name = "SmartRouter"
+
+    def __init__(
+        self,
+        *,
+        strict: bool = True,
+        routers: Sequence[RouterFactory] = (RegExpRouter, TrieRouter),
+    ) -> None:
+        self._strict = strict
+        self._factories = tuple(routers)
+        self._routes: list[Route] = []
+        self._chosen: RouterLike | None = None
+
+    @property
+    def chosen(self) -> str | None:
+        """The name of the router in use, once one has been chosen."""
+        return None if self._chosen is None else self._chosen.name
+
+    def add(self, route: Route) -> None:
+        if self._chosen is not None:
+            raise RuntimeError("cannot add a route after the router has been chosen")
+        self._routes.append(route)
+
+    def compile(self) -> None:
+        if self._chosen is not None:
+            return
+        for factory in self._factories:
+            candidate = factory(strict=self._strict)
+            try:
+                for route in self._routes:
+                    candidate.add(route)
+                candidate.compile()
+            except UnsupportedPathError:
+                continue
+            self._chosen = candidate
+            return
+        raise RuntimeError("Fatal error: no router can take this set of routes")
+
+    def _active(self) -> RouterLike:
+        if self._chosen is None:
+            self.compile()
+        assert self._chosen is not None
+        return self._chosen
+
+    def match(self, method: str, path: str) -> tuple[Route, Mapping[str, str]] | None:
+        return self._active().match(method, path)
+
+    def allowed_methods(self, path: str) -> list[str]:
+        return self._active().allowed_methods(path)
