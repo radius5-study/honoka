@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 # 02: App, router, Context, Response, Json[T], RSGI entry
