@@ -1,4 +1,4 @@
-"""Routing and handlers, observed through the public test client (a fake RSGI server)."""
+"""Routing and handlers, observed through the public test client (the ASGI entry, driven in process)."""
 
 import threading
 

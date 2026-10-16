@@ -14,7 +14,7 @@ META: dict[str, object] = {
     "granian": "2.8.4",
     "server": "Granian, 4 workers",
     "load": "256 connections",
-    "versions": {"honoka": "0.1.0", "raw-rsgi": "2.8.4"},
+    "versions": {"honoka": "0.1.0", "raw-asgi": "2.8.4"},
 }
 
 
@@ -37,12 +37,12 @@ def pick(*names: str) -> list[Framework]:
 
 def test_a_missing_readme_is_created_with_the_methodology_and_the_results(tmp_path: Path) -> None:
     readme = tmp_path / "README.md"
-    results = {"raw-rsgi": {"mixed": cell(1000)}, "honoka": {"mixed": cell(800)}}
-    update_readme(readme, META, results, pick("raw-rsgi", "honoka"), ["mixed"])
+    results = {"raw-asgi": {"mixed": cell(1000)}, "honoka": {"mixed": cell(800)}}
+    update_readme(readme, META, results, pick("raw-asgi", "honoka"), ["mixed"])
     text = readme.read_text()
     assert "## How to compare fairly" in text
     assert "| honoka | 800 |" in text
-    assert "| honoka (vs raw-rsgi) | 80% |" in text
+    assert "| honoka (vs raw-asgi) | 80% |" in text
 
 
 def test_only_the_marked_section_changes_and_a_second_run_replaces_the_first(
@@ -52,18 +52,18 @@ def test_only_the_marked_section_changes_and_a_second_run_replaces_the_first(
     readme.write_text(
         f"intro written by hand\n\n{START}\nold numbers\n{END}\n\noutro written by hand\n"
     )
-    frameworks = pick("raw-rsgi", "honoka")
+    frameworks = pick("raw-asgi", "honoka")
     update_readme(
         readme,
         META,
-        {"raw-rsgi": {"mixed": cell(1000)}, "honoka": {"mixed": cell(500)}},
+        {"raw-asgi": {"mixed": cell(1000)}, "honoka": {"mixed": cell(500)}},
         frameworks,
         ["mixed"],
     )
     update_readme(
         readme,
         META,
-        {"raw-rsgi": {"mixed": cell(1000)}, "honoka": {"mixed": cell(900)}},
+        {"raw-asgi": {"mixed": cell(1000)}, "honoka": {"mixed": cell(900)}},
         frameworks,
         ["mixed"],
     )
@@ -79,10 +79,10 @@ def test_only_the_marked_section_changes_and_a_second_run_replaces_the_first(
 def test_frameworks_that_could_not_be_measured_are_listed_with_the_reason(tmp_path: Path) -> None:
     readme = tmp_path / "README.md"
     results: dict[str, Cells] = {
-        "raw-rsgi": {"mixed": cell(1000)},
+        "raw-asgi": {"mixed": cell(1000)},
         "robyn": {"*": {"error": "does not conform: GET /products 500"}},
     }
-    update_readme(readme, META, results, pick("raw-rsgi", "robyn"), ["mixed"])
+    update_readme(readme, META, results, pick("raw-asgi", "robyn"), ["mixed"])
     text = readme.read_text()
     assert "### Not measured" in text
     assert "- robyn: does not conform: GET /products 500" in text

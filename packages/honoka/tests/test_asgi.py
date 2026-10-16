@@ -1,11 +1,8 @@
-"""One app, two server interfaces: RSGI (Granian) and ASGI (uvicorn, Cloudflare Workers, ...).
-
-The same requests must produce the same responses on both, byte for byte."""
+"""The ASGI entry as a server sees it: responses, lifespan, lazy start and host quirks."""
 
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Literal
 
 import pytest
 
@@ -118,22 +115,8 @@ REQUESTS: list[Request] = [
 ]
 
 
-def outcome(app: App, interface: Literal["rsgi", "asgi"], request: Request) -> object:
-    method, path, headers, body = request
-    with app.test(interface=interface) as client:
-        resp = client.request(method, path, headers=headers, content=body)
-    return resp.status, sorted(resp.raw_headers), resp.body
-
-
-@pytest.mark.parametrize("request_", REQUESTS, ids=[f"{m} {p}" for m, p, _, _ in REQUESTS])
-def test_rsgi_and_asgi_answer_every_request_identically(request_: Request, tmp_path: Path) -> None:
-    assert outcome(build(tmp_path)[0], "asgi", request_) == outcome(
-        build(tmp_path)[0], "rsgi", request_
-    )
-
-
-def test_the_asgi_answers_are_the_real_thing_not_just_equal_to_each_other(tmp_path: Path) -> None:
-    with build(tmp_path)[0].test(interface="asgi") as client:
+def test_responses_carry_status_headers_cookies_and_streamed_bodies(tmp_path: Path) -> None:
+    with build(tmp_path)[0].test() as client:
         text = client.get("/text")
         crash = client.get("/crash")
         stream = client.get("/stream")
@@ -148,7 +131,7 @@ def test_the_asgi_answers_are_the_real_thing_not_just_equal_to_each_other(tmp_pa
 
 
 def test_a_header_split_into_several_fields_is_read_as_one(tmp_path: Path) -> None:
-    """HTTP/2 clients may send `cookie` as separate fields; RSGI hands them over joined."""
+    """HTTP/2 clients may send `cookie` as separate fields; they must read as one header."""
     app, _ = build(tmp_path)
     fields = [(b"cookie", b"a=1"), (b"cookie", b"b=2"), (b"x-multi", b"p"), (b"x-multi", b"q")]
     sent: list[AsgiMessage] = []
@@ -164,13 +147,80 @@ def test_a_header_split_into_several_fields_is_read_as_one(tmp_path: Path) -> No
     assert sent[-1]["body"] == b"1|2|p, q"
 
 
+def test_a_redirect_to_a_non_ascii_path_is_sent_as_utf_8(tmp_path: Path) -> None:
+    with build(tmp_path)[0].test() as client:
+        assert client.get("/jump").headers["location"] == "/日本語"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "status", "body"),
+    [
+        ("GET", "/missing", 404, b'{"error":"not_found"}'),
+        ("DELETE", "/text", 405, b'{"error":"method_not_allowed"}'),
+        ("OPTIONS", "/text", 204, b""),
+        ("HEAD", "/text", 200, b""),
+        ("HEAD", "/stream", 200, b""),
+        ("GET", "/users/abc", 404, b'{"error":"not_found"}'),
+        ("GET", "/files/a/b.txt", 200, b"/files/a/b.txt"),
+        ("GET", "/file", 200, b"from disk"),
+    ],
+)
+def test_status_and_body_for_the_common_outcomes(
+    method: str, path: str, status: int, body: bytes, tmp_path: Path
+) -> None:
+    with build(tmp_path)[0].test() as client:
+        response = client.request(method, path)
+    assert (response.status, response.body) == (status, body)
+
+
+def test_request_parts_reach_the_handler(tmp_path: Path) -> None:
+    with build(tmp_path)[0].test() as client:
+        got = client.get(
+            "/users/7?q=hi%20there&tag=a&tag=b", headers={"user-agent": "t", "cookie": "sid=s1"}
+        ).json()
+        echoed = client.post("/echo", json={"a": [1, 2, {"b": None}]})
+    assert got == {"id": 7, "q": "hi there", "tags": ["a", "b"], "agent": "t", "cookie": "s1"}
+    assert (echoed.status, echoed.json()) == (201, {"body": {"a": [1, 2, {"b": None}]}})
+
+
+class _Lifespan:
+    """Drives the app's ASGI lifespan protocol the way an ASGI server does."""
+
+    def __init__(self, app: App) -> None:
+        self._app = app
+        self._inbox: asyncio.Queue[AsgiMessage] = asyncio.Queue()
+        self._outbox: asyncio.Queue[AsgiMessage] = asyncio.Queue()
+        self._task: asyncio.Task[None] | None = None
+
+    async def startup(self) -> None:
+        scope: AsgiMessage = {"type": "lifespan", "asgi": {"version": "3.0"}}
+        self._task = asyncio.create_task(self._app(scope, self._inbox.get, self._outbox.put))
+        await self._inbox.put({"type": "lifespan.startup"})
+        reply = await self._outbox.get()
+        if reply["type"] != "lifespan.startup.complete":
+            raise RuntimeError(str(reply.get("message", "startup failed")))
+
+    async def shutdown(self) -> None:
+        await self._inbox.put({"type": "lifespan.shutdown"})
+        reply = await self._outbox.get()
+        if self._task is not None:
+            await self._task
+        if reply["type"] != "lifespan.shutdown.complete":
+            raise RuntimeError(str(reply.get("message", "shutdown failed")))
+
+
 def test_lifespan_runs_startup_and_shutdown_hooks_through_the_asgi_protocol(
     tmp_path: Path,
 ) -> None:
     app, log = build(tmp_path)
-    with app.test(interface="asgi") as client:
-        assert client.get("/log").text == "up"
+
+    async def serve() -> None:
+        lifespan = _Lifespan(app)
+        await lifespan.startup()
         assert log == ["up"]
+        await lifespan.shutdown()
+
+    asyncio.run(serve())
     assert log == ["up", "down"]
 
 
@@ -186,15 +236,15 @@ def test_without_a_lifespan_the_first_request_starts_the_app_exactly_once(tmp_pa
     assert set(asyncio.run(hit())) == {b"up"}
 
 
-def test_a_failing_startup_hook_is_reported_to_the_asgi_server(tmp_path: Path) -> None:
+def test_a_failing_startup_hook_is_reported_to_the_asgi_server() -> None:
     app = App()
 
     @app.on_startup
     def fail() -> None:
         raise RuntimeError("database unreachable")
 
-    with pytest.raises(RuntimeError, match="database unreachable"), app.test(interface="asgi"):
-        pass
+    with pytest.raises(RuntimeError, match="database unreachable"):
+        asyncio.run(_Lifespan(app).startup())
 
 
 def test_without_threads_sync_handlers_run_inline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -217,7 +267,7 @@ def test_without_threads_sync_handlers_run_inline(monkeypatch: pytest.MonkeyPatc
         seen["sync"] = threading.get_ident()
         return c.text("")
 
-    with app.test(interface="asgi") as client:
+    with app.test() as client:
         client.get("/loop")
         client.get("/sync")
     assert seen["sync"] == seen["loop"]

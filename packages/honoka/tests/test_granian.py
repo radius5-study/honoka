@@ -1,4 +1,4 @@
-"""The same App behind a real Granian RSGI server, to catch drift from the fake test server."""
+"""The same App behind a real Granian server, to catch drift from the fake test server."""
 
 import socket
 import subprocess
@@ -19,9 +19,9 @@ def free_port() -> int:
         return int(s.getsockname()[1])
 
 
-@pytest.fixture(scope="module", params=["rsgi", "asgi"])
-def base_url(request: pytest.FixtureRequest) -> Iterator[str]:
-    """The same app, served by real Granian through each interface."""
+@pytest.fixture(scope="module")
+def base_url() -> Iterator[str]:
+    """The app served by real Granian."""
     port = free_port()
     server = subprocess.Popen(
         [
@@ -29,7 +29,7 @@ def base_url(request: pytest.FixtureRequest) -> Iterator[str]:
             "-m",
             "granian",
             "--interface",
-            str(request.param),
+            "asgi",
             "--host",
             "127.0.0.1",
             "--port",

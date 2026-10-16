@@ -1,7 +1,7 @@
 [project]
 name = "honoka"
 version = "0.1.0"
-description = "A thin Python web framework for Granian (RSGI), inspired by Hono"
+description = "A thin Python web framework for ASGI, inspired by Hono"
 authors = [
     { name = "L4Ph", email = "me@l4ph.moe" }
 ]

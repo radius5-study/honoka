@@ -30,8 +30,7 @@ Load scenarios (`src/honoka_benchmarks/mix.py`):
   encoder. honoka uses `MsgspecCodec`, Litestar uses msgspec natively, the rest use their
   defaults. Frameworks without built-in validation (Starlette, Falcon, BlackSheep, Robyn, the raw
   baselines) validate with msgspec, which is the cheapest correct option.
-- `raw-rsgi` and `raw-asgi` are hand-written apps: the floor that a framework on the same
-  interface adds its own overhead to.
+- `raw-asgi` is a hand-written app: the floor that a framework adds its own overhead to.
 - Each framework runs in **one worker process** by default. With several workers the kernel
   spreads connections unevenly and differently on every start; a 4-worker run varied up to 3.7x
   between passes for the same app (`results/*-4workers-noisy.json`). One process measures
@@ -61,6 +60,8 @@ uv run python -m honoka_benchmarks.run --check-only         # conformance only
 Raw numbers of every run are kept in `results/*.json`.
 
 ## Latest results
+
+> The results below were measured before honoka dropped RSGI: honoka ran as an RSGI app and was compared with `raw-rsgi`. Run the suite again to get ASGI-only numbers.
 
 <!-- benchmark-results:start -->
 Run on 2026-10-16 18:22 UTC at commit `8f9efb0`.

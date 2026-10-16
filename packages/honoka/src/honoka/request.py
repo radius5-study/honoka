@@ -1,9 +1,9 @@
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import cast, get_origin, overload
 from urllib.parse import parse_qsl
 
-from honoka._rsgi import Proto, Scope
+from honoka.asgi import HttpScope, Receive
 from honoka.errors import HTTPError
 from honoka.json import JsonCodec
 
@@ -14,18 +14,20 @@ class Request:
         "_body_limit",
         "_codec",
         "_cookies",
+        "_headers",
         "_params",
-        "_proto",
         "_query",
+        "_receive",
         "_scope",
         "_valid",
     )
 
     def __init__(
-        self, scope: Scope, proto: Proto, params: Mapping[str, str], codec: JsonCodec
+        self, scope: HttpScope, receive: Receive, params: Mapping[str, str], codec: JsonCodec
     ) -> None:
         self._scope = scope
-        self._proto = proto
+        self._receive = receive
+        self._headers: dict[str, str] | None = None
         self._params = params
         self._codec = codec
         self._query: dict[str, list[str]] | None = None
@@ -36,14 +38,16 @@ class Request:
 
     @property
     def method(self) -> str:
-        return self._scope.method
+        return self._scope["method"]
 
     @property
     def path(self) -> str:
-        return self._scope.path
+        return self._scope["path"]
 
     def header(self, name: str) -> str | None:
-        return self._scope.headers.get(name.lower())
+        if self._headers is None:
+            self._headers = _index_headers(self._scope["headers"])
+        return self._headers.get(name.lower())
 
     @overload
     def param(self, name: str) -> str: ...
@@ -75,7 +79,7 @@ class Request:
 
     @property
     def query_string(self) -> str:
-        return self._scope.query_string
+        return self._scope["query_string"].decode("latin-1")
 
     @property
     def params(self) -> Mapping[str, str]:
@@ -84,7 +88,8 @@ class Request:
 
     @property
     def client(self) -> str:
-        return self._scope.client
+        client = self._scope.get("client")
+        return f"{client[0]}:{client[1]}" if client else ""
 
     def query(self, name: str) -> str | None:
         """The first value of the query parameter `name`."""
@@ -97,7 +102,7 @@ class Request:
     def _query_map(self) -> dict[str, list[str]]:
         """Every query parameter, grouped by name, parsed once per request."""
         if self._query is None:
-            text = self._scope.query_string
+            text = self.query_string
             grouped: dict[str, list[str]] = {}
             if "%" not in text and "+" not in text:
                 # Nothing to decode: splitting by hand is several times faster than urllib.
@@ -134,16 +139,20 @@ class Request:
         self._body_limit = max_bytes
 
     async def body(self) -> bytes:
+        """The whole body. A client that disconnects part-way leaves what had arrived."""
         if self._body is None:
-            if self._body_limit is None:
-                self._body = await self._proto()
-            else:
-                received = bytearray()
-                async for chunk in self._proto:
-                    received += chunk
-                    if len(received) > self._body_limit:
-                        raise HTTPError(413, "payload_too_large")
-                self._body = bytes(received)
+            received = bytearray()
+            limit = self._body_limit
+            while True:
+                message = await self._receive()
+                if message["type"] != "http.request":  # http.disconnect
+                    break
+                received += cast(bytes, message.get("body", b""))
+                if limit is not None and len(received) > limit:
+                    raise HTTPError(413, "payload_too_large")
+                if not message.get("more_body"):
+                    break
+            self._body = bytes(received)
         return self._body
 
     async def json(self) -> object:
@@ -176,6 +185,19 @@ class Request:
         if len(matches) > 1:
             raise ValueError(f"{name} is ambiguous: validated for {matches}; pass target=")
         return cast(T, valid[matches[0]])
+
+
+def _index_headers(raw: Iterable[tuple[bytes, bytes]]) -> dict[str, str]:
+    """Header fields by lowercase name. A repeated field is joined as RFC 9110 says (`cookie`,
+    which HTTP/2 splits, with "; ")."""
+    table: dict[str, str] = {}
+    for name, value in raw:
+        key = name.decode("latin-1").lower()
+        text = value.decode("latin-1")
+        if key in table:
+            text = table[key] + ("; " if key == "cookie" else ", ") + text
+        table[key] = text
+    return table
 
 
 def _runtime_type(kind: object) -> type:

@@ -1,13 +1,13 @@
-"""The App: route registration, registration-time chain composition, and the RSGI entry."""
+"""The App: route registration, registration-time chain composition, and the ASGI entry."""
 
 import asyncio
 import inspect
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Literal, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
-from honoka._rsgi import Proto, Scope
-from honoka.asgi import AsgiProto, AsgiScope, HttpScope, Receive, Send, run_lifespan
+from honoka.asgi import AsgiMessage, AsgiScope, HttpScope, Receive, Send, run_lifespan
 from honoka.context import Context, Key
 from honoka.errors import HTTPError, default_error_response
 from honoka.json import STDLIB_JSON, JsonCodec
@@ -180,12 +180,6 @@ class App:
         for hook in reversed(self._shutdown):
             await _run_hook(hook)
 
-    def __rsgi_init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        loop.run_until_complete(self.start())
-
-    def __rsgi_del__(self, loop: asyncio.AbstractEventLoop) -> None:
-        loop.run_until_complete(self.stop())
-
     def get[H: Handler](
         self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
     ) -> Callable[[H], H]:
@@ -265,11 +259,11 @@ class App:
         """Compile routes now, so registration mistakes surface at startup, not on a request."""
         self._compile()
 
-    def test(self, interface: Literal["rsgi", "asgi"] = "rsgi") -> "Client":
-        """A synchronous test client. `interface=\"asgi\"` drives the app through its ASGI entry."""
+    def test(self) -> "Client":
+        """A synchronous test client that drives the app through its ASGI entry."""
         from honoka.testing import Client
 
-        return Client(self, interface=interface)
+        return Client(self)
 
     # -- compilation --------------------------------------------------------------------------
 
@@ -324,7 +318,7 @@ class App:
         """Wrap `endpoint` in `middlewares`, outermost first.
 
         Each step a middleware calls is guarded, so the middleware sees an error response instead
-        of an exception. The outermost step is guarded by `__rsgi__`, saving one frame a request."""
+        of an exception. The outermost step is guarded by `_dispatch`, saving one frame a request."""
         step = endpoint
         for mw in reversed(middlewares):
             step = self._layer(mw, self._guard(step))
@@ -351,66 +345,65 @@ class App:
         self._router = router
         return router
 
-    # -- RSGI entry ---------------------------------------------------------------------------
-
-    async def __rsgi__(self, scope: Scope, proto: Proto) -> None:
-        router = self._router or self._compile()
-        found = router.match(scope.method, scope.path)
-        head = found is None and scope.method == "HEAD"
-        if head:
-            found = router.match("GET", scope.path)
-        params = NO_PARAMS if found is None else found[1]
-        c = Context(Request(scope, proto, params, self._codec), self._provided, self._codec)
-        if found is not None and found[0].chain is not None:
-            c.route = found[0].pattern
-            chain = found[0].chain
-        else:
-            wrapping = [mw for pattern, mw in self._middlewares if _matches(pattern, scope.path)]
-            chain = self._compose(wrapping, self._unmatched)
-        try:
-            response = await chain(c)
-        except Exception as exc:  # noqa: BLE001 - the framework boundary catches everything
-            response = await self._handle_error(c, exc)
-        if head:
-            response.body = b""
-        if c.set_cookies is not None:
-            response.headers.extend(("set-cookie", v) for v in c.set_cookies)
-        if isinstance(response, Stream):
-            if head:
-                proto.response_empty(response.status, response.headers)
-            else:
-                await self._send_stream(proto, response)
-        elif isinstance(response, FileResponse):
-            if head:
-                proto.response_empty(response.status, response.headers)
-            else:
-                proto.response_file(response.status, response.headers, response.path)
-        elif response.body:
-            proto.response_bytes(response.status, response.headers, response.body)
-        else:
-            proto.response_empty(response.status, response.headers)
-
-    @staticmethod
-    async def _send_stream(proto: Proto, response: Stream) -> None:
-        transport = proto.response_stream(response.status, response.headers)
-        async for chunk in response.chunks:
-            await transport.send_bytes(chunk.encode() if isinstance(chunk, str) else chunk)
+    # -- ASGI entry ---------------------------------------------------------------------------
 
     async def __call__(self, scope: AsgiScope, receive: Receive, send: Send) -> None:
-        """The ASGI entry: lets uvicorn, Cloudflare Python Workers (`asgi.entrypoint(app)`) and any
-        other ASGI host serve this app. Granian's RSGI uses `__rsgi__` instead."""
+        """The ASGI entry: Granian, uvicorn and Cloudflare Python Workers
+        (`asgi.entrypoint(app)`) all serve the app through it."""
         kind = scope["type"]
         if kind == "http":
             if not self._started:
                 await self._ensure_started()
-            proto = AsgiProto(receive, send)
-            await self.__rsgi__(HttpScope(scope), proto)
-            await proto.finish()
+            await self._dispatch(cast(HttpScope, scope), receive, send)
         elif kind == "lifespan":
             await run_lifespan(self, receive, send)
         elif kind == "websocket":  # not supported yet: refuse the handshake politely
             await receive()
             await send({"type": "websocket.close", "code": 1000})
+
+    async def _dispatch(self, scope: HttpScope, receive: Receive, send: Send) -> None:
+        router = self._router or self._compile()
+        method, path = scope["method"], scope["path"]
+        found = router.match(method, path)
+        head = found is None and method == "HEAD"
+        if head:
+            found = router.match("GET", path)
+        params = NO_PARAMS if found is None else found[1]
+        c = Context(Request(scope, receive, params, self._codec), self._provided, self._codec)
+        if found is not None and found[0].chain is not None:
+            c.route = found[0].pattern
+            chain = found[0].chain
+        else:
+            wrapping = [mw for pattern, mw in self._middlewares if _matches(pattern, path)]
+            chain = self._compose(wrapping, self._unmatched)
+        try:
+            response = await chain(c)
+        except Exception as exc:  # noqa: BLE001 - the framework boundary catches everything
+            response = await self._handle_error(c, exc)
+        if c.set_cookies is not None:
+            response.headers.extend(("set-cookie", v) for v in c.set_cookies)
+        # UTF-8, as the servers do for str headers: a redirect to "/日本語" must not crash.
+        start: AsgiMessage = {
+            "type": "http.response.start",
+            "status": response.status,
+            "headers": [(k.lower().encode("latin-1"), v.encode()) for k, v in response.headers],
+        }
+        await send(start)
+        if isinstance(response, Stream) and not head:
+            async for chunk in response.chunks:
+                data = chunk.encode() if isinstance(chunk, str) else chunk
+                await send({"type": "http.response.body", "body": data, "more_body": True})
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+        else:
+            body = b""
+            if head or isinstance(response, Stream):
+                pass
+            elif isinstance(response, FileResponse):
+                # ASGI has no portable "send this file"; read it (Workers has no disk anyway).
+                body = Path(response.path).read_bytes()
+            else:
+                body = response.body
+            await send({"type": "http.response.body", "body": body})
 
     async def _ensure_started(self) -> None:
         """Hosts without a lifespan (Workers) never announce startup: do it on the first request."""

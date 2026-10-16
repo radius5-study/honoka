@@ -40,8 +40,7 @@ Load scenarios (`src/honoka_benchmarks/mix.py`):
   encoder. honoka uses `MsgspecCodec`, Litestar uses msgspec natively, the rest use their
   defaults. Frameworks without built-in validation (Starlette, Falcon, BlackSheep, Robyn, the raw
   baselines) validate with msgspec, which is the cheapest correct option.
-- `raw-rsgi` and `raw-asgi` are hand-written apps: the floor that a framework on the same
-  interface adds its own overhead to.
+- `raw-asgi` is a hand-written app: the floor that a framework adds its own overhead to.
 - Each framework runs in **one worker process** by default. With several workers the kernel
   spreads connections unevenly and differently on every start; a 4-worker run varied up to 3.7x
   between passes for the same app (`results/*-4workers-noisy.json`). One process measures

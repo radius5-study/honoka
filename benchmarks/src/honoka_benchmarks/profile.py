@@ -9,63 +9,33 @@ import cProfile
 import importlib
 import pstats
 import time
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import MutableMapping
 
 from honoka_benchmarks.frameworks import FRAMEWORKS
 from honoka_benchmarks.mix import build_pool
 
-
-class _Headers:
-    def __init__(self, items: list[tuple[str, str]]) -> None:
-        self._items = items
-
-    def get(self, key: str, default: str | None = None, /) -> str | None:
-        return next((v for k, v in self._items if k == key), default)
-
-    def items(self) -> Iterable[tuple[str, str]]:
-        return list(self._items)
+type Request = tuple[str, str, str, list[tuple[bytes, bytes]], bytes]
 
 
-class _Scope:
-    client = "127.0.0.1:1"
-
-    def __init__(self, method: str, path: str, query: str, headers: list[tuple[str, str]]) -> None:
-        self.method, self.path, self.query_string = method, path, query
-        self.headers = _Headers(headers)
+async def _send(message: MutableMapping[str, object]) -> None:
+    pass
 
 
-class _Proto:
-    def __init__(self, body: bytes) -> None:
-        self._body = body
-
-    async def __call__(self) -> bytes:
-        return self._body
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        yield self._body
-
-    def response_bytes(self, status: int, headers: list[tuple[str, str]], body: bytes, /) -> None:
-        pass
-
-    def response_empty(self, status: int, headers: list[tuple[str, str]], /) -> None:
-        pass
-
-
-def parse(raw: bytes) -> tuple[str, str, str, list[tuple[str, str]], bytes]:
+def parse(raw: bytes) -> Request:
     head, _, body = raw.partition(b"\r\n\r\n")
     request_line, *header_lines = head.decode().split("\r\n")
     method, target, _ = request_line.split(" ")
     path, _, query = target.partition("?")
-    headers: list[tuple[str, str]] = []
+    headers: list[tuple[bytes, bytes]] = []
     for line in header_lines:
         name, _, value = line.partition(": ")
-        headers.append((name.lower(), value))
+        headers.append((name.lower().encode(), value.encode()))
     return method, path, query, headers, body
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("framework", choices=[f.name for f in FRAMEWORKS if f.interface == "rsgi"])
+    parser.add_argument("framework", choices=[f.name for f in FRAMEWORKS if f.interface == "asgi"])
     parser.add_argument("--requests", type=int, default=30000)
     parser.add_argument("--scenario", default="mixed")
     parser.add_argument("--top", type=int, default=25)
@@ -80,7 +50,19 @@ def main() -> None:
     async def drive(count: int) -> None:
         for i in range(count):
             method, path, query, headers, body = pool[i % len(pool)]
-            await app.__rsgi__(_Scope(method, path, query, headers), _Proto(body))
+            scope = {
+                "type": "http",
+                "method": method,
+                "path": path,
+                "query_string": query.encode(),
+                "headers": headers,
+                "client": ("127.0.0.1", 1),
+            }
+
+            async def receive(body: bytes = body) -> MutableMapping[str, object]:
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            await app(scope, receive, _send)
 
     from honoka_benchmarks import shop
 

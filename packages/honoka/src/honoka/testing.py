@@ -1,11 +1,10 @@
-"""A synchronous client that drives an App through its real RSGI entry with a fake server."""
+"""A synchronous client that drives an App through its ASGI entry the way a server does."""
 
 import asyncio
 import json as jsonlib
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
-from pathlib import Path
+from collections.abc import Coroutine, Mapping
 from types import TracebackType
-from typing import TYPE_CHECKING, Literal, Self, cast
+from typing import TYPE_CHECKING, Self, cast
 
 if TYPE_CHECKING:
     from honoka.app import App
@@ -29,65 +28,6 @@ class ClientResponse:
     def json(self) -> object:
         decoded: object = jsonlib.loads(self.body)
         return decoded
-
-
-class _Headers:
-    def __init__(self, items: list[tuple[str, str]]) -> None:
-        self._items = items
-
-    def get(self, key: str, default: str | None = None, /) -> str | None:
-        for k, v in self._items:
-            if k == key:
-                return v
-        return default
-
-    def items(self) -> Iterable[tuple[str, str]]:
-        return list(self._items)
-
-
-class _Scope:
-    def __init__(
-        self, method: str, path: str, query_string: str, headers: list[tuple[str, str]]
-    ) -> None:
-        self.method = method
-        self.path = path
-        self.query_string = query_string
-        self.headers = _Headers(headers)
-        self.client = "127.0.0.1:50000"
-
-
-class _Transport:
-    def __init__(self, response: ClientResponse) -> None:
-        self._response = response
-
-    async def send_bytes(self, data: bytes, /) -> None:
-        self._response.body += data
-
-
-class _Proto:
-    def __init__(self, body: bytes) -> None:
-        self._body = body
-        self.response: ClientResponse | None = None
-
-    async def __call__(self) -> bytes:
-        return self._body
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        for start in range(0, len(self._body), 4):
-            yield self._body[start : start + 4]
-
-    def response_empty(self, status: int, headers: list[tuple[str, str]], /) -> None:
-        self.response = ClientResponse(status, headers, b"")
-
-    def response_bytes(self, status: int, headers: list[tuple[str, str]], body: bytes, /) -> None:
-        self.response = ClientResponse(status, headers, body)
-
-    def response_file(self, status: int, headers: list[tuple[str, str]], file: str, /) -> None:
-        self.response = ClientResponse(status, headers, Path(file).read_bytes())
-
-    def response_stream(self, status: int, headers: list[tuple[str, str]], /) -> _Transport:
-        self.response = ClientResponse(status, headers, b"")
-        return _Transport(self.response)
 
 
 async def asgi_call(
@@ -149,43 +89,15 @@ async def asgi_call(
     )
 
 
-class _Lifespan:
-    """Drives the app's ASGI lifespan protocol the way an ASGI server does."""
-
+class Client:
     def __init__(self, app: "App") -> None:
         self._app = app
-        self._inbox: asyncio.Queue[AsgiMessage] = asyncio.Queue()
-        self._outbox: asyncio.Queue[AsgiMessage] = asyncio.Queue()
-        self._task: asyncio.Task[None] | None = None
-
-    async def startup(self) -> None:
-        scope: AsgiMessage = {"type": "lifespan", "asgi": {"version": "3.0"}}
-        self._task = asyncio.create_task(self._app(scope, self._inbox.get, self._outbox.put))
-        await self._inbox.put({"type": "lifespan.startup"})
-        reply = await self._outbox.get()
-        if reply["type"] != "lifespan.startup.complete":
-            raise RuntimeError(str(reply.get("message", "startup failed")))
-
-    async def shutdown(self) -> None:
-        await self._inbox.put({"type": "lifespan.shutdown"})
-        reply = await self._outbox.get()
-        if self._task is not None:
-            await self._task
-        if reply["type"] != "lifespan.shutdown.complete":
-            raise RuntimeError(str(reply.get("message", "shutdown failed")))
-
-
-class Client:
-    def __init__(self, app: "App", interface: Literal["rsgi", "asgi"] = "rsgi") -> None:
-        self._app = app
-        self._interface = interface
         self._runner: asyncio.Runner | None = None
-        self._lifespan = _Lifespan(app) if interface == "asgi" else None
         self._started = False
 
     def __enter__(self) -> Self:
         try:
-            self._run(self._lifespan.startup() if self._lifespan else self._app.start())
+            self._run(self._app.start())
             self._started = True
         except BaseException:
             self.close()
@@ -204,7 +116,7 @@ class Client:
         if self._runner is not None:
             if self._started:
                 self._started = False
-                self._runner.run(self._lifespan.shutdown() if self._lifespan else self._app.stop())
+                self._runner.run(self._app.stop())
             self._runner.close()
             self._runner = None
 
@@ -222,21 +134,14 @@ class Client:
         json: object = None,
         content: bytes | None = None,
     ) -> ClientResponse:
-        target, _, query = path.partition("?")
         raw_headers = [(k.lower(), v) for k, v in (headers or {}).items()]
         body = content or b""
         if json is not None:
             body = jsonlib.dumps(json).encode()
             raw_headers.append(("content-type", "application/json"))
-        if self._interface == "asgi":
-            return self._run(
-                asgi_call(self._app, method, path, headers=dict(raw_headers), content=body)
-            )
-        proto = _Proto(body)
-        self._run(self._app.__rsgi__(_Scope(method, target, query, raw_headers), proto))
-        if proto.response is None:
-            raise AssertionError("the app returned without sending a response")
-        return proto.response
+        return self._run(
+            asgi_call(self._app, method, path, headers=dict(raw_headers), content=body)
+        )
 
     def get(self, path: str, *, headers: Mapping[str, str] | None = None) -> ClientResponse:
         return self.request("GET", path, headers=headers)

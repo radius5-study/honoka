@@ -28,7 +28,7 @@ We will build a web framework that brings the philosophy of Hono (JS) — "a thi
 Granian's own interface, RSGI, was the first target. It is dropped because it buys little and costs a second path:
 
 - **Portability is a requirement**: Workers (Pyodide) and every other host speak ASGI only. An RSGI path would be a second entry to build, test and keep identical
-- **Measured gap** (one Granian worker, `ab`, honoka's own app, three alternating runs on a laptop, noisy): ASGI was 5–15% slower than RSGI. For a bare hello-world app, raw ASGI and raw RSGI measured the same (about 43–45k rps per worker). In DB-bound services the framework is a small share of the request, so we accept the gap
+- **Measured gap** (one Granian worker, `ab`, honoka's own app, three alternating runs on a laptop, noisy): ASGI was 5–15% slower than RSGI while honoka converted the ASGI scope into an RSGI-shaped one. Once the core read the ASGI scope directly, the same test gave about 114k rps twice (and one noisy 56k), level with RSGI's best run, so the cost was the conversion, not ASGI. For a bare hello-world app, raw ASGI and raw RSGI measured the same (about 43–45k rps per worker). In DB-bound services the framework is a small share of the request, so we accept the gap
 - **Revisit if**: a benchmark shows the ASGI scope/send round trip dominating real workloads. The fix would be a thinner Context over the ASGI scope, not a second interface
 
 ## 3. Design Principles
@@ -358,7 +358,7 @@ The benchmarks must be runnable by anyone with one command and must compare hono
 | Adopting Pydantic as the validator | 6–15× slower than msgspec. It also avoids defining Structs twice, so msgspec has the edge |
 | Rust-side pre-validation | Ownership of "correctness" splits across three layers, making debugging difficult. The complexity never gets contained |
 | Built-in validation in the core | Violates Hono's "thin core" principle. Middleware is sufficient |
-| RSGI as a second interface | Only Granian speaks it, Workers cannot; measured gain 5–15% over ASGI on honoka's own app (2.3) |
+| RSGI as a second interface | Only Granian speaks it, Workers cannot; no measurable gain once the core reads ASGI directly (2.3) |
 | Swagger UI | Scalar is adopted instead |
 | mypy plugins | Violates the design requirement of expressing everything with standard type features |
 | Automatic inference of Context type parameters (TS-style) | Limits of the Python type system |
