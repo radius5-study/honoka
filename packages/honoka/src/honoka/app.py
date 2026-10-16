@@ -82,15 +82,11 @@ class App:
         json_codec: JsonCodec = STDLIB_JSON,
         strict: bool = True,
         router: RouterFactory | None = None,
-        threads: bool = True,
     ) -> None:
         """`strict=False` makes `/a` and `/a/` the same path (Hono's `strict` option). `router`
-        picks the matching strategy: `SmartRouter` (default), `RegExpRouter` or `TrieRouter`.
-        `threads=False` runs `def` handlers on the event loop, for hosts without threads
-        (Cloudflare Python Workers)."""
+        picks the matching strategy: `SmartRouter` (default), `RegExpRouter` or `TrieRouter`."""
         self._codec = json_codec
         self._strict = strict
-        self._threads = threads
         self._router_factory = DEFAULT_ROUTER if router is None else router
         self._routes: list[Route] = []
         self._middlewares: list[tuple[str, Middleware]] = []
@@ -102,7 +98,6 @@ class App:
         self._startup: list[Hook] = []
         self._shutdown: list[Hook] = []
         self._started = False
-        self._start_lock: asyncio.Lock | None = None
 
     # -- registration -------------------------------------------------------------------------
 
@@ -298,7 +293,7 @@ class App:
         if _is_async(handler):
             # An `async def` handler already is `(Context) -> Awaitable[Response]`.
             return cast("Chain", handler)
-        if inline or not self._threads:
+        if inline:
 
             async def run_inline(c: Context) -> Response:
                 result = handler(c)
@@ -348,12 +343,9 @@ class App:
     # -- ASGI entry ---------------------------------------------------------------------------
 
     async def __call__(self, scope: AsgiScope, receive: Receive, send: Send) -> None:
-        """The ASGI entry: Granian, uvicorn and Cloudflare Python Workers
-        (`asgi.entrypoint(app)`) all serve the app through it."""
+        """The ASGI entry: any ASGI server serves the app through it."""
         kind = scope["type"]
         if kind == "http":
-            if not self._started:
-                await self._ensure_started()
             await self._dispatch(cast(HttpScope, scope), receive, send)
         elif kind == "lifespan":
             await run_lifespan(self, receive, send)
@@ -399,18 +391,11 @@ class App:
             if head or isinstance(response, Stream):
                 pass
             elif isinstance(response, FileResponse):
-                # ASGI has no portable "send this file"; read it (Workers has no disk anyway).
+                # ASGI has no portable "send this file"; read it.
                 body = Path(response.path).read_bytes()
             else:
                 body = response.body
             await send({"type": "http.response.body", "body": body})
-
-    async def _ensure_started(self) -> None:
-        """Hosts without a lifespan (Workers) never announce startup: do it on the first request."""
-        if self._start_lock is None:
-            self._start_lock = asyncio.Lock()
-        async with self._start_lock:
-            await self.start()
 
     async def _unmatched(self, c: Context) -> Response:
         allowed = self._router.allowed_methods(c.req.path) if self._router else []

@@ -2,7 +2,7 @@
 
 A Hono-style web framework for Python 3.13+: a thin core centred on `Context`, one
 package per middleware, typed end to end. Runs on any ASGI server (Granian, uvicorn) and
-Cloudflare Python Workers (ASGI). The design is in [rfc/honoka-framework-rfc.md](rfc/honoka-framework-rfc.md).
+Cloudflare Python Workers (through a separate adapter package). The design is in [rfc/honoka-framework-rfc.md](rfc/honoka-framework-rfc.md).
 
 ```python
 import msgspec
@@ -27,7 +27,7 @@ async def create_user(c: Context) -> Json[NewUser]:
 ```
 
 ```sh
-granian --interface asgi app:app      # or uvicorn; on Workers: App(threads=False), asgi.entrypoint(app)
+granian --interface asgi app:app      # or uvicorn; host adapters such as Cloudflare Workers are separate packages
 honoka routes app                     # list routes
 honoka check app                      # find handlers that read data no validator provides
 ```

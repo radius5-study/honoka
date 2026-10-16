@@ -20,7 +20,7 @@ We will build a web framework that brings the philosophy of Hono (JS) — "a thi
 
 ### 2.2 Technical foundations
 
-- **ASGI**: The community-driven de facto specification between server and application, and the only one that Cloudflare Python Workers (`asgi.entrypoint(app)`), uvicorn, Granian and Hypercorn all serve. It carries structural overhead from round-tripping event dicts
+- **ASGI**: The community-driven de facto specification between server and application, and the one that Cloudflare Python Workers, uvicorn, Granian and Hypercorn all serve. It carries structural overhead from round-tripping event dicts
 - **Granian**: A server written in Rust (tokio + hyper + PyO3). Supports ASGI/WSGI/RSGI, HTTP/1 and HTTP/2, and WebSocket, and has a production track record. Not supported: HTTP/3, trio/gevent, and some ASGI extensions
 
 ### 2.3 Decision: ASGI only, no RSGI
@@ -35,7 +35,7 @@ Granian's own interface, RSGI, was the first target. It is dropped because it bu
 
 1. **Context first**: Handlers take only a `Context` argument. This eliminates DI hell
 2. **Touch the scope only when asked**: The ASGI scope is already a dict, so nothing is converted up front. Headers are indexed, the query parsed and the body read on first access, and per-request state (cookies, stored values) is created only when used
-3. **Synchronous handlers are supported, and safe by default**: `def` handlers run in a worker thread so that blocking I/O cannot stall the event loop. Calling them inline on the loop is an explicit opt-in (`inline=True`); it is also the only mode where threads do not exist (Pyodide, see 4.3)
+3. **Synchronous handlers are supported, and safe by default**: `def` handlers run in a worker thread so that blocking I/O cannot stall the event loop. Calling them inline on the loop is an explicit opt-in (`inline=True`); hosts without threads are an adapter concern (4.3)
 4. **Keep the core thin**: The core contains no schema validation, OpenAPI, or authentication. These are middleware/plugins; each official middleware is its own package, e.g. `honoka-cors` (see 9.4). The core has no third-party dependencies: JSON goes through a pluggable codec (`App(json_codec=...)`), which is the standard library by default and `MsgspecCodec` from honoka-msgspec for Structs
 5. **Validation is a single layer**: msgspec only. Do not split it across multiple layers (e.g., Rust-side validation), which would multiply the owners of "correctness". The core only converts scalar path/query parameters (`c.req.param(name, type)`); that is parsing, not schema validation
 6. **Standard type features only**: Do not rely on mypy plugins. Passing under the strictest settings of ty and Pyrefly is a design requirement
@@ -77,13 +77,14 @@ The app object is the ASGI callable. There is no adapter layer and no second int
 - **Does**: routing, holding the Context object, emitting responses (the HTTP layer belongs to the server)
 - **Does not**: validation (does not look inside the JSON), business logic
 
-### 4.3 Hosts
+### 4.3 Hosts and adapters
 
-- **Granian / uvicorn**: `granian --interface asgi app:app`. Lifespan is handled: startup and shutdown hooks run when the server announces them
-- **Cloudflare Python Workers**: `from workers import asgi; Default = asgi.entrypoint(app)`. There is no lifespan, so startup hooks run lazily once, on the first request, under a lock
-- **No threads on Pyodide**: the app says so explicitly, `App(threads=False)`, and plain `def` handlers then run on the event loop. Nothing sniffs the platform. `c.file` reads the bytes there; there is no disk
+The core knows ASGI and nothing about any host. Anything that depends on where the app runs lives in a separate adapter package, one per host (e.g. `honoka-workers`).
+
+- **Any ASGI server** (Granian, uvicorn): `granian --interface asgi app:app`. Lifespan is handled: startup and shutdown hooks run when the server announces them
+- **Adapters own host specifics**: Cloudflare Python Workers has no lifespan, no threads (so `def` handlers must run on the loop), and passes its bindings in `scope["env"]` (documented for WSGI; to verify for ASGI) and `workers.env`. An adapter wraps the app (`workers.asgi.entrypoint`), starts it, and exposes `c.env` through a typed `Key`. None of this is in the core
+- **Seams the core must offer** so adapters need no patches: read access to the raw ASGI scope, a way to start and stop the app (`app.start()` / `app.stop()`, present), and a way to run sync handlers on the loop (per route `inline=True`, present; an app-wide switch is the adapter's design problem). Decide when the first adapter is written
 - **WebSocket** scopes are closed with 1000 until v3
-- **Open**: the Pyodide version Workers pins decides which msgspec the validator can use (Pyodide ships 0.19-0.20); verify before the first deploy
 - **Open**: `c.file` reads the whole file into memory. Servers that offer the `http.response.pathsend` extension (Granian does, to be verified) could send the file themselves
 - **Known limits**: `root_path` is ignored, so mounting under a sub-path is a v2 `mount` concern; a client disconnect while the body is being read ends the read with what arrived
 
@@ -325,7 +326,7 @@ honoka-mcp        … MCP exposure (future)
   2. Verify `Key[T]`, `c.req.valid(T)`, and `Json[T]` in both checkers (`ok.py` / `bad.py`)
   3. Implement the Context over the ASGI scope
   4. Build the benchmark harness (see 11.1) and a minimal implementation (static routing, `Json[T]` returns, a `Context` that can be constructed without a server); measure the cost of the Context abstraction against bare ASGI and the other frameworks
-- **v1**: Complete the core (middleware, error handling, synchronous handlers), honoka-msgspec, honoka-openapi (Scalar), honoka check, the v1 middleware packages of 9.4, a minimal `app.test()`, Cloudflare Workers support (4.3)
+- **v1**: Complete the core (middleware, error handling, synchronous handlers), honoka-msgspec, honoka-openapi (Scalar), honoka check, the v1 middleware packages of 9.4, a minimal `app.test()`, the ASGI entry (4.1)
 - **v2**: the v2 middleware packages (authentication, idempotency, rate limiting, ...), full test client
 - **v3 and later**: Formal design of WebSocket/SSE, honoka-mcp
 

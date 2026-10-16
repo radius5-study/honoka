@@ -224,18 +224,6 @@ def test_lifespan_runs_startup_and_shutdown_hooks_through_the_asgi_protocol(
     assert log == ["up", "down"]
 
 
-def test_without_a_lifespan_the_first_request_starts_the_app_exactly_once(tmp_path: Path) -> None:
-    app, _ = build(tmp_path)
-
-    async def hit() -> list[bytes]:
-        from honoka.testing import asgi_call
-
-        results = await asyncio.gather(*(asgi_call(app, "GET", "/log") for _ in range(5)))
-        return [r.body for r in results]
-
-    assert set(asyncio.run(hit())) == {b"up"}
-
-
 def test_a_failing_startup_hook_is_reported_to_the_asgi_server() -> None:
     app = App()
 
@@ -245,26 +233,3 @@ def test_a_failing_startup_hook_is_reported_to_the_asgi_server() -> None:
 
     with pytest.raises(RuntimeError, match="database unreachable"):
         asyncio.run(_Lifespan(app).startup())
-
-
-def test_with_threads_off_sync_handlers_run_on_the_loop() -> None:
-    """Cloudflare Python Workers cannot start threads, so `App(threads=False)` is how to say so."""
-    import threading
-
-    app = App(threads=False)
-    seen: dict[str, int] = {}
-
-    @app.get("/loop")
-    async def on_loop(c: Context) -> Response:
-        seen["loop"] = threading.get_ident()
-        return c.text("")
-
-    @app.get("/sync")
-    def sync(c: Context) -> Response:
-        seen["sync"] = threading.get_ident()
-        return c.text("")
-
-    with app.test() as client:
-        client.get("/loop")
-        client.get("/sync")
-    assert seen["sync"] == seen["loop"]
