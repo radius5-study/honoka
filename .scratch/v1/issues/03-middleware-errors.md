@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 # 03: Key[T], middleware chain, HTTPError, on_error, not_found

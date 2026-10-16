@@ -16,8 +16,6 @@ from honoka.types import Handler, Middleware, Next
 if TYPE_CHECKING:
     from honoka.testing import Client
 
-type ErrorHandler = Callable[[Context], Response | object]
-
 
 class _Next:
     """The `call_next` handed to a middleware. One small object per request per layer."""
@@ -53,7 +51,7 @@ class App:
     def __init__(self) -> None:
         self._routes: list[Route] = []
         self._middlewares: list[tuple[str, Middleware]] = []
-        self._on_error: ErrorHandler | None = None
+        self._on_error: Handler | None = None
         self._not_found: Handler | None = None
         self._provided: dict[object, object] = {}
         self._router: Router | None = None
@@ -107,6 +105,23 @@ class App:
     ) -> Callable[[H], H]:
         return self._route("DELETE", path, middleware, inline, meta)
 
+    def use(self, path: str, middleware: Middleware) -> None:
+        """Wrap every route (and unmatched request) whose path matches `path`, e.g. `/api/*`."""
+        if not _is_async(middleware):
+            raise TypeError(f"middleware {middleware!r} must be an async function")
+        self._middlewares.append((path, middleware))
+        self._router = None
+
+    def on_error[H: Handler](self, handler: H) -> H:
+        """Decide the response for an error; it is read from `c.error`."""
+        self._on_error = handler
+        return handler
+
+    def not_found[H: Handler](self, handler: H) -> H:
+        """Answer requests that match no route."""
+        self._not_found = handler
+        return handler
+
     def route_table(self) -> list[RouteInfo]:
         return [
             RouteInfo(r.method, r.pattern, r.handler, r.middleware, r.meta) for r in self._routes
@@ -138,14 +153,17 @@ class App:
         c.error = exc
         if self._on_error is not None:
             try:
-                result = self._on_error(c)
-                if inspect.isawaitable(result):
-                    result = await result
-                if isinstance(result, Response):
-                    return result
+                return await self._call(self._on_error, c)
             except Exception as handler_exc:  # noqa: BLE001 - a failing handler falls back
                 exc = handler_exc
         return default_error_response(exc)
+
+    @staticmethod
+    async def _call(handler: Handler, c: Context) -> Response:
+        result = handler(c)
+        if isinstance(result, Response):
+            return result
+        return await result
 
     def _endpoint(self, handler: Handler, inline: bool) -> Chain:
         if _is_async(handler):
@@ -210,7 +228,8 @@ class App:
             c.route = found[0].pattern
             chain = found[0].chain
         else:
-            chain = self._compose([], self._unmatched)
+            wrapping = [mw for pattern, mw in self._middlewares if _matches(pattern, scope.path)]
+            chain = self._compose(wrapping, self._unmatched)
         response = await chain(c)
         if head:
             response.body = b""
@@ -225,6 +244,8 @@ class App:
     async def _unmatched(self, c: Context) -> Response:
         allowed = self._router.allowed_methods(c.req.path) if self._router else []
         if not allowed:
+            if self._not_found is not None:
+                return await self._call(self._not_found, c)
             raise HTTPError(404, "not_found")
         allow = ("allow", ", ".join(allowed))
         if c.req.method == "OPTIONS":
