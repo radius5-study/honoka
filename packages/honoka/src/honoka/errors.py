@@ -32,6 +32,13 @@ class HTTPError(Exception):
         return body
 
 
+class NotFound(HTTPError):
+    """Nothing answers this request. `not_found` registrations take over, then the built-in 404."""
+
+    def __init__(self) -> None:
+        super().__init__(404, "not_found")
+
+
 class ValidationFailed(HTTPError):
     """A request that did not match its schema. Raised by validators such as honoka-msgspec."""
 

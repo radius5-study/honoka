@@ -136,7 +136,15 @@ class Context:  # no type parameters
 
     def set[T](self, key: Key[T], value: T) -> None: ...
     def get[T](self, key: Key[T]) -> T: ...  # raises LookupError if the key was never set
-    def json[T](self, obj: T, status: int = 200) -> Json[T]: ...
+    def json[T](self, obj: T, status: int | None = None, headers: Mapping[str, str] | None = None) -> Json[T]: ...
+    def text(self, body: str, status: int | None = None, headers: ... = None) -> Response: ...
+    def html(self, body: str, status: int | None = None, headers: ... = None) -> Response: ...
+    def body(self, data: str | bytes, status: int | None = None, headers: ... = None) -> Response: ...
+    def status(self, code: int) -> None: ...  # the default status of the response built next
+    def header(self, name: str, value: str | None, *, append: bool = False) -> None: ...
+    def not_found(self) -> NoReturn: ...  # answered by the not_found steps (5.4)
+    error: Exception | None  # the error being handled, inside on_error
+    route: str | None  # the matched route template
 ```
 
 ```python
@@ -172,16 +180,28 @@ app.use("/admin/*", auth)
 ### 5.4 Error handling
 
 ```python
-@app.on_error
-async def on_error(c: Context) -> Response: ...  # the error is read from c.error
+@app.on_error  # a final handler: it answers
+def on_error(c: Context) -> Response: ...  # the error is read from c.error
 
 
-@app.not_found
-def not_found(c: Context) -> Response: ...
+@app.on_error  # or a step: answer, or hand over with next()
+async def only_runtime(c: Context, call_next: Next) -> Response: ...
+
+
+app.not_found("/api/*", mark, answer)  # path first, then any number of steps
 ```
 
 - Handlers signal errors by raising `HTTPError(status, code, detail=None)`, which the core renders in the machine-readable format below (`code` becomes the `error` field). `ValidationFailed` is a subclass of `HTTPError`, defined in the core and raised by honoka-msgspec
-- `on_error` takes only the Context (principle 1), as in Hono v5 (`c.error`)
+- `on_error` and `not_found` follow Hono v5, where they register routable middleware instead of one replaceable handler:
+  - A step is `(c, next)` middleware or a `(c)` final handler (told apart by its required parameters). The error is read from `c.error`
+  - Registrations **stack**. A step returns a response to stop, or calls `next()` to delegate; when the steps run out, the built-in answer is used (`default_error_response`, the plain 404)
+  - An optional path comes first (`app.not_found("/api/*", ...)`). It is independent of the HTTP method; without one it is `*`
+  - `app.route(prefix, sub)` imports the sub-app's registrations below the prefix, deeper sub-apps first, then registration order
+  - `not_found` runs for unmatched requests and for `c.not_found()`; an `HTTPError(404, ...)` raised by a handler is an ordinary error and goes to `on_error`
+  - An exception raised inside a step goes to the built-in answer and never escapes the app
+- Not carried over from Hono v5: thrown non-Error values (Python raises only exceptions), `getColorEnabledAsync`, `app.fire`, `mount` (v2, 9.4). `c.json` on a value the codec cannot encode raises `TypeError`, as v5 does
+- `c.req.query()` and `c.req.queries()` without a name return every parameter (first value, and all values)
+- Known gap against v5: wildcards. honoka accepts only a trailing `*` segment; v5 also matches a lone `*` in the middle (`/wild/*/card`, one non-empty segment) and `x*` at the end of a segment (`/x*/y`)
 
 - Validation errors are short-circuited by the middleware with a structured 400 (before the handler runs)
 - All error responses use a machine-readable format (see below)
@@ -298,8 +318,8 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 | v1 (core) | conninfo | `c.req.client` (remote address from the ASGI scope) |
 | v1 (core) | route | `c.route` (the matched route template, e.g. `/users/{user_id}`), used by logger/metrics so that labels stay low-cardinality |
 | v1 (core) | html | `c.html(str)` (needed for the docs page; no template DSL) |
-| v1 (core) | file | `c.file(path, root=..., filename=...)`: the server streams the file from disk. Pass `root` when `path` comes from a request, so `../` and absolute paths are a 404 |
-| v1 (core) | streaming | `c.stream(...)` over `response_stream`; the SSE helper `c.sse(...)` follows in v2 |
+| v1 (core) | file | `c.file(path, root=..., filename=...)`: read into memory for now (see 4.3). Pass `root` when `path` comes from a request, so `../` and absolute paths are a 404 |
+| v1 (core) | streaming | `c.stream(...)`, chunks sent as produced; the SSE helper `c.sse(...)` follows in v2 |
 | v1 (CLI) | dev | `honoka routes` prints `app.route_table()` (Hono's `showRoutes`) |
 | v0/v1 | testing | `app.test()` (see 12.3) |
 | v2 (separate packages) | signed cookies, JWT `sign`/`verify`/`decode` | Take a secret/key supplied by the user |

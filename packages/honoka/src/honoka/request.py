@@ -91,13 +91,32 @@ class Request:
         client = self._scope.get("client")
         return f"{client[0]}:{client[1]}" if client else ""
 
-    def query(self, name: str) -> str | None:
-        """The first value of the query parameter `name`."""
-        values = self._query_map().get(name)
+    @overload
+    def query(self, name: str) -> str | None: ...
+
+    @overload
+    def query(self) -> dict[str, str]: ...
+
+    def query(self, name: str | None = None) -> str | None | dict[str, str]:
+        """The first value of the query parameter `name`, or every parameter's first value."""
+        grouped = self._query_map()
+        if name is None:
+            return {key: values[0] for key, values in grouped.items()}
+        values = grouped.get(name)
         return None if values is None else values[0]
 
-    def queries(self, name: str) -> list[str]:
-        return list(self._query_map().get(name, ()))
+    @overload
+    def queries(self, name: str) -> list[str]: ...
+
+    @overload
+    def queries(self) -> dict[str, list[str]]: ...
+
+    def queries(self, name: str | None = None) -> list[str] | dict[str, list[str]]:
+        """Every value of the query parameter `name`, or all parameters with all their values."""
+        grouped = self._query_map()
+        if name is None:
+            return {key: list(values) for key, values in grouped.items()}
+        return list(grouped.get(name, ()))
 
     def _query_map(self) -> dict[str, list[str]]:
         """Every query parameter, grouped by name, parsed once per request."""

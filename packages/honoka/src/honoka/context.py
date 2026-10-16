@@ -3,12 +3,12 @@
 import mimetypes
 import os
 import re
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, NoReturn, cast
 from urllib.parse import quote
 
-from honoka.errors import HTTPError
+from honoka.errors import HTTPError, NotFound
 from honoka.json import JsonCodec
 from honoka.response import FileResponse, Json, Response, Stream
 
@@ -36,7 +36,17 @@ class Key[T]:
 
 
 class Context:
-    __slots__ = ("_codec", "_provided", "_store", "error", "req", "route", "set_cookies")
+    __slots__ = (
+        "_codec",
+        "_header_ops",
+        "_provided",
+        "_status",
+        "_store",
+        "error",
+        "req",
+        "route",
+        "set_cookies",
+    )
 
     def __init__(self, req: "Request", provided: dict[object, object], codec: JsonCodec) -> None:
         self.req = req
@@ -46,6 +56,8 @@ class Context:
         self._provided = provided
         self._codec = codec
         self.set_cookies: list[str] | None = None
+        self._status = 200
+        self._header_ops: list[tuple[str, str | None, bool]] | None = None
 
     def set[T](self, key: Key[T], value: T) -> None:
         if self._store is None:
@@ -64,14 +76,65 @@ class Context:
     def set_validated(self, target: str, value: object) -> None:
         self.req.set_valid(target, value)
 
-    def json[T](self, obj: T, status: int = 200) -> Json[T]:
-        return Json(obj, status, codec=self._codec)
+    def status(self, code: int) -> None:
+        """The status the next `json`/`text`/`html`/`body` answers with when not given one."""
+        self._status = code
 
-    def text(self, body: str, status: int = 200) -> Response:
-        return Response(body.encode(), status, [("content-type", "text/plain; charset=utf-8")])
+    def header(self, name: str, value: str | None, *, append: bool = False) -> None:
+        """Set a response header; `None` removes it, `append=True` adds another value instead of
+        replacing. Applied to whatever response the request ends up with."""
+        if self._header_ops is None:
+            self._header_ops = []
+        self._header_ops.append((name.lower(), value, append))
 
-    def html(self, body: str, status: int = 200) -> Response:
-        return Response(body.encode(), status, [("content-type", "text/html; charset=utf-8")])
+    def apply_headers(self, response: Response) -> None:
+        """Merge what `header()` recorded into `response` (called once, by the app)."""
+        for name, value, append in self._header_ops or ():
+            if not append:
+                response.headers[:] = [h for h in response.headers if h[0].lower() != name]
+            if value is not None:
+                response.headers.append((name, value))
+
+    def json[T](
+        self, obj: T, status: int | None = None, headers: Mapping[str, str] | None = None
+    ) -> Json[T]:
+        return Json(
+            obj,
+            self._status if status is None else status,
+            None if headers is None else list(headers.items()),
+            codec=self._codec,
+        )
+
+    def text(
+        self, body: str, status: int | None = None, headers: Mapping[str, str] | None = None
+    ) -> Response:
+        return self.body(body, status, headers, "text/plain; charset=utf-8")
+
+    def html(
+        self, body: str, status: int | None = None, headers: Mapping[str, str] | None = None
+    ) -> Response:
+        return self.body(body, status, headers, "text/html; charset=utf-8")
+
+    def body(
+        self,
+        data: str | bytes,
+        status: int | None = None,
+        headers: Mapping[str, str] | None = None,
+        content_type: str | None = None,
+    ) -> Response:
+        """A raw response body. `text` and `html` are this with a content type."""
+        out = [] if content_type is None else [("content-type", content_type)]
+        if headers is not None:
+            out.extend(headers.items())
+        return Response(
+            data.encode() if isinstance(data, str) else data,
+            self._status if status is None else status,
+            out,
+        )
+
+    def not_found(self) -> NoReturn:
+        """Answer 404 through the app's `not_found` registrations."""
+        raise NotFound
 
     def file(
         self,

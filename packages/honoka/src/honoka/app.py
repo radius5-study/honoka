@@ -4,11 +4,12 @@ import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, cast, overload
 
 from honoka.asgi import AsgiMessage, AsgiScope, HttpScope, Receive, Send, run_lifespan
 from honoka.context import Context, Key
-from honoka.errors import HTTPError, default_error_response
+from honoka.errors import HTTPError, NotFound, default_error_response
+from honoka.fallback import Fallback, Fallbacks
 from honoka.json import STDLIB_JSON, JsonCodec
 from honoka.request import Request
 from honoka.response import FileResponse, Response, Stream
@@ -90,8 +91,8 @@ class App:
         self._router_factory = DEFAULT_ROUTER if router is None else router
         self._routes: list[Route] = []
         self._middlewares: list[tuple[str, Middleware]] = []
-        self._on_error: Handler | None = None
-        self._not_found: Handler | None = None
+        self._on_error = Fallbacks(_matches)
+        self._not_found = Fallbacks(_matches)
         self._provided: dict[object, object] = {}
         self._router: RouterLike | None = None
         self._seen: set[tuple[str, str]] = set()
@@ -136,7 +137,7 @@ class App:
 
     def route(self, prefix: str, sub: "App") -> None:
         """Mount `sub` under `prefix`. Its middleware applies only below the prefix; its
-        `on_error`/`not_found` handlers are ignored (the parent app owns them)."""
+        `on_error`/`not_found` registrations come along and run before the parent's."""
         prefix = prefix.rstrip("/")
         for r in sub._routes:
             pattern = prefix if r.pattern == "/" else prefix + r.pattern
@@ -145,6 +146,8 @@ class App:
             self._middlewares.append(
                 (prefix + "/*" if pattern in ("*", "/*") else prefix + pattern, mw)
             )
+        self._on_error.mount(prefix, sub._on_error)
+        self._not_found.mount(prefix, sub._not_found)
         self._router = None
 
     def on_startup[F: Hook](self, hook: F) -> F:
@@ -235,15 +238,28 @@ class App:
         self._middlewares.append((path, middleware))
         self._router = None
 
-    def on_error[H: Handler](self, handler: H) -> H:
-        """Decide the response for an error; it is read from `c.error`."""
-        self._on_error = handler
-        return handler
+    @overload
+    def on_error[F: Fallback](self, handler: F, /) -> F: ...
 
-    def not_found[H: Handler](self, handler: H) -> H:
-        """Answer requests that match no route."""
-        self._not_found = handler
-        return handler
+    @overload
+    def on_error(self, first: str | Fallback, /, *rest: Fallback) -> None: ...
+
+    def on_error(self, *steps: str | Fallback) -> Fallback | None:
+        """Decide the response for an error, read from `c.error`. Steps are `(c)` handlers or
+        `(c, next)` middleware, optionally scoped by a path first; registrations stack."""
+        self._on_error.add(steps)
+        return steps[0] if len(steps) == 1 and not isinstance(steps[0], str) else None
+
+    @overload
+    def not_found[F: Fallback](self, handler: F, /) -> F: ...
+
+    @overload
+    def not_found(self, first: str | Fallback, /, *rest: Fallback) -> None: ...
+
+    def not_found(self, *steps: str | Fallback) -> Fallback | None:
+        """Answer requests that match no route, and `c.not_found()`. Same shape as `on_error`."""
+        self._not_found.add(steps)
+        return steps[0] if len(steps) == 1 and not isinstance(steps[0], str) else None
 
     def route_table(self) -> list[RouteInfo]:
         return [
@@ -274,20 +290,19 @@ class App:
         return guarded
 
     async def _handle_error(self, c: Context, exc: Exception) -> Response:
+        if isinstance(exc, NotFound):
+            return await self._answer_not_found(c)
         c.error = exc
-        if self._on_error is not None:
-            try:
-                return await self._call(self._on_error, c)
-            except Exception as handler_exc:  # noqa: BLE001 - a failing handler falls back
-                exc = handler_exc
-        return default_error_response(exc)
+        try:
+            return await self._on_error.run(c, lambda: default_error_response(exc))
+        except Exception as handler_exc:  # noqa: BLE001 - a failing handler falls back
+            return default_error_response(handler_exc)
 
-    @staticmethod
-    async def _call(handler: Handler, c: Context) -> Response:
-        result = handler(c)
-        if isinstance(result, Response):
-            return result
-        return await result
+    async def _answer_not_found(self, c: Context) -> Response:
+        try:
+            return await self._not_found.run(c, lambda: default_error_response(NotFound()))
+        except Exception as exc:  # noqa: BLE001 - a failing handler falls back
+            return default_error_response(exc)
 
     def _endpoint(self, handler: Handler, inline: bool) -> Chain:
         if _is_async(handler):
@@ -372,6 +387,8 @@ class App:
             response = await chain(c)
         except Exception as exc:  # noqa: BLE001 - the framework boundary catches everything
             response = await self._handle_error(c, exc)
+        if c._header_ops is not None:
+            c.apply_headers(response)
         if c.set_cookies is not None:
             response.headers.extend(("set-cookie", v) for v in c.set_cookies)
         # UTF-8, as the servers do for str headers: a redirect to "/日本語" must not crash.
@@ -400,9 +417,7 @@ class App:
     async def _unmatched(self, c: Context) -> Response:
         allowed = self._router.allowed_methods(c.req.path) if self._router else []
         if not allowed:
-            if self._not_found is not None:
-                return await self._call(self._not_found, c)
-            raise HTTPError(404, "not_found")
+            raise NotFound
         allow = ("allow", ", ".join(allowed))
         if c.req.method == "OPTIONS":
             return Response(b"", 204, [allow])
