@@ -47,14 +47,24 @@ type AsgiApp = Callable[[AsgiScope, Receive, Send], Awaitable[None]]
 
 
 class _Shared:
-    """State that `base_path()` views of one app share: the compiled router and whether it ran."""
+    """State that `base_path()` views of one app share: what was compiled and whether it ran."""
 
-    __slots__ = ("router", "started", "ws_router")
+    __slots__ = ("mounts", "router", "started", "ws_router")
 
     def __init__(self) -> None:
         self.router: RouterLike | None = None
         self.ws_router: RouterLike | None = None
+        self.mounts: list[tuple[str, AsgiApp, Chain]] = []
         self.started = False
+
+
+class _Pass(Response):
+    """What the end of a gate's middleware chain returns: the request may go on."""
+
+    __slots__ = ()
+
+    def __init__(self) -> None:
+        super().__init__(b"", 200)
 
 
 class _Next:
@@ -67,7 +77,10 @@ class _Next:
         self._step = step
 
     async def __call__(self) -> Response:
-        return await self._step(self._c)
+        response = await self._step(self._c)
+        if self._c._header_ops is not None:
+            self._c.apply_headers(response)
+        return response
 
 
 def _is_async(fn: object) -> bool:
@@ -83,6 +96,32 @@ async def _run_hook(hook: Hook) -> None:
         await result
 
 
+def _applicability(middleware: str, route: str) -> str:
+    """Whether a middleware pattern covers every path of a route (`always`), none (`never`), or
+    some, which only the request path can decide (`maybe`)."""
+    if middleware in ("*", "/*"):
+        return "always"
+    if _matches(middleware, route):
+        return "always"
+    if not route.startswith("/"):
+        return "maybe"
+    wanted = split(normalize(middleware))
+    wildcard = bool(wanted) and wanted[-1] == "*"
+    if wildcard:
+        wanted = wanted[:-1]
+    segments = parse_pattern(route)
+    for want, got in zip(wanted, segments, strict=False):
+        if got.kind == "literal" and got.text != want:
+            return "never"
+    if (
+        not wildcard
+        and len(segments) > len(wanted)
+        and all(seg.kind == "literal" for seg in segments)
+    ):
+        return "never"
+    return "maybe"
+
+
 def _matches(pattern: str, target: str) -> bool:
     """Whether the middleware `pattern` (`/api/*`, `/admin`, `*`) applies to `target`."""
     if pattern in ("*", "/*"):
@@ -92,6 +131,17 @@ def _matches(pattern: str, target: str) -> bool:
     base = split(pattern[:-2] if wildcard else pattern)
     parts = split(target)
     return parts[: len(base)] == base if wildcard else parts == base
+
+
+def _gated(pattern: str, mw: Middleware) -> Middleware:
+    """`mw`, but only for requests whose path `pattern` covers."""
+
+    async def gated(c: Context, call_next: Next) -> Response:
+        if _matches(pattern, c.req.path):
+            return await mw(c, call_next)
+        return await call_next()
+
+    return gated
 
 
 class App:
@@ -210,7 +260,10 @@ class App:
         """Serve another ASGI application below `prefix`. It sees the path without the prefix
         (and the prefix in `root_path`). Mounted apps answer before this app's routes and
         middleware run."""
-        self._mounts.append((self._base + prefix.rstrip("/"), app))
+        full = self._base + prefix.rstrip("/")
+        if not full:
+            raise ValueError("mount needs a prefix other than '/': it would swallow every route")
+        self._mounts.append((full, app))
 
     def ws[H: WebSocketHandler](self, path: str) -> Callable[[H], H]:
         """Register a WebSocket handler: `async def chat(ws: WebSocket)`. It must `accept()`."""
@@ -429,21 +482,44 @@ class App:
 
         return run
 
+    def _applicable(self, route: Route) -> list[Middleware]:
+        """The middleware that runs for `route`, each gated by the request path when the route's
+        pattern leaves open whether the middleware's pattern covers it."""
+        applicable: list[Middleware] = []
+        for pattern, mw in self._middlewares:
+            fit = _applicability(pattern, route.pattern)
+            if fit == "always":
+                applicable.append(mw)
+            elif fit == "maybe":
+                applicable.append(_gated(pattern, mw))
+        applicable.extend(route.middleware)
+        return applicable
+
+    @staticmethod
+    async def _pass(c: Context) -> Response:
+        return _Pass()
+
     def _compile(self) -> RouterLike:
         router = self._router_factory(strict=self._strict)
         for route in self._routes:
-            applicable = [
-                mw for pattern, mw in self._middlewares if _matches(pattern, route.pattern)
-            ]
-            applicable.extend(route.middleware)
-            route.chain = self._compose(applicable, self._endpoint(route.handler, route.inline))
+            route.chain = self._compose(
+                self._applicable(route), self._endpoint(route.handler, route.inline)
+            )
             router.add(route)
         router.compile()
         ws_router = self._router_factory(strict=self._strict)
         for pattern, ws_handler in self._websockets:
-            ws_router.add(Route("WS", pattern, cast(Handler, ws_handler), (), False, {}))
+            gate = Route("WS", pattern, cast(Handler, ws_handler), (), False, {})
+            gate.chain = self._compose(self._applicable(gate), self._pass)
+            ws_router.add(gate)
         ws_router.compile()
         self._shared.ws_router = ws_router
+        self._shared.mounts = []
+        for prefix, app in self._mounts:
+            gate = Route("MOUNT", prefix + "/*", self._pass, (), False, {})
+            self._shared.mounts.append(
+                (prefix, app, self._compose(self._applicable(gate), self._pass))
+            )
         self._router = router
         return router
 
@@ -462,13 +538,41 @@ class App:
         elif kind == "websocket":
             await self._serve_websocket(scope, receive, send)
 
+    async def _gate(
+        self, scope: AsgiScope, path: str, chain: Chain, receive: Receive
+    ) -> tuple[Context, Response | None]:
+        """Run the middleware that covers a mount or a WebSocket. `None` means it may go on."""
+        gate_scope = cast(HttpScope, {"method": "GET", **scope})
+        c = Context(
+            Request(gate_scope, receive, NO_PARAMS, self._codec, path), self._provided, self._codec
+        )
+        try:
+            response = await chain(c)
+        except Exception as exc:  # noqa: BLE001 - the framework boundary catches everything
+            response = await self._handle_error(c, exc)
+        return c, None if isinstance(response, _Pass) else response
+
     async def _mounted(self, scope: AsgiScope, receive: Receive, send: Send) -> bool:
-        """Hand the request to a mounted ASGI app if its prefix covers the path."""
+        """Hand the request to a mounted ASGI app if its prefix covers the path, after the
+        middleware that covers the prefix has let it through."""
+        if self._router is None:
+            self._compile()
         path = cast(str, scope["path"])
-        for prefix, app in self._mounts:
+        for prefix, app, chain in self._shared.mounts:
             if path == prefix or path.startswith(prefix + "/"):
+                c, refused = await self._gate(scope, path, chain, receive)
+                if refused is not None:
+                    if scope["type"] == "websocket":
+                        await receive()
+                        await send({"type": "websocket.close", "code": 1008})
+                    else:
+                        await self._emit(c, refused, scope["method"] == "HEAD", send)
+                    return True
                 inner = dict(scope)
                 inner["path"] = path[len(prefix) :] or "/"
+                raw = scope.get("raw_path")
+                if isinstance(raw, bytes) and raw.startswith(prefix.encode()):
+                    inner["raw_path"] = raw[len(prefix) :] or b"/"
                 inner["root_path"] = cast(str, scope.get("root_path", "")) + prefix
                 await app(inner, receive, send)
                 return True
@@ -478,11 +582,20 @@ class App:
         if self._router is None:
             self._compile()
         router = self._shared.ws_router
-        path = cast(str, scope["path"])
+        path = (
+            cast(str, scope["path"])
+            if self._get_path is None
+            else self._get_path(cast(HttpScope, {"method": "GET", **scope}))
+        )
         found = None if router is None else router.match("WS", path)
-        if found is None:
+        if found is None or found[0].chain is None:
             await receive()  # the connect event; closing before accept answers 403
             await send({"type": "websocket.close", "code": 1000})
+            return
+        _, refused = await self._gate(scope, path, found[0].chain, receive)
+        if refused is not None:
+            await receive()
+            await send({"type": "websocket.close", "code": 1008})
             return
         socket = WebSocket(scope, receive, send, found[1], path)
         handler = cast(WebSocketHandler, found[0].handler)
@@ -516,6 +629,9 @@ class App:
             response = await chain(c)
         except Exception as exc:  # noqa: BLE001 - the framework boundary catches everything
             response = await self._handle_error(c, exc)
+        await self._emit(c, response, head, send)
+
+    async def _emit(self, c: Context, response: Response, head: bool, send: Send) -> None:
         if c._header_ops is not None:
             c.apply_headers(response)
         if c.set_cookies is not None:

@@ -35,6 +35,7 @@ class Key[T]:
 class Context:
     __slots__ = (
         "_codec",
+        "_header_done",
         "_header_ops",
         "_provided",
         "_status",
@@ -55,6 +56,7 @@ class Context:
         self.set_cookies: list[str] | None = None
         self._status = 200
         self._header_ops: list[tuple[str, str | None, bool]] | None = None
+        self._header_done = 0
 
     def set[T](self, key: Key[T], value: T) -> None:
         if self._store is None:
@@ -85,12 +87,15 @@ class Context:
         self._header_ops.append((name.lower(), value, append))
 
     def apply_headers(self, response: Response) -> None:
-        """Merge what `header()` recorded into `response` (called once, by the app)."""
-        for name, value, append in self._header_ops or ():
+        """Merge what `header()` recorded since the last call into `response`. Called each time a
+        response travels back up through a middleware, so middleware sees these headers."""
+        ops = self._header_ops or []
+        for name, value, append in ops[self._header_done :]:
             if not append:
                 response.headers[:] = [h for h in response.headers if h[0].lower() != name]
             if value is not None:
                 response.headers.append((name, value))
+        self._header_done = len(ops)
 
     def json[T](
         self, obj: T, status: int | None = None, headers: Mapping[str, str] | None = None
@@ -147,13 +152,17 @@ class Context:
         When `path` comes from the request, pass `root`: the file must then sit below that
         directory, so `../` and absolute paths answer 404 instead of leaking other files.
         `filename` makes the browser download it under that name."""
-        target = Path(path)
-        if root is not None:
-            base = Path(root).resolve()
-            target = (base / target).resolve()
-            if not target.is_relative_to(base):
-                raise HTTPError(404, "file_not_found")
-        if not target.is_file():
+        try:
+            target = Path(path)
+            if root is not None:
+                base = Path(root).resolve()
+                target = (base / target).resolve()
+                if not target.is_relative_to(base):
+                    raise HTTPError(404, "file_not_found")
+            found = target.is_file()
+        except (OSError, ValueError):  # a name too long for the file system, or a NUL byte
+            raise HTTPError(404, "file_not_found") from None
+        if not found:
             raise HTTPError(404, "file_not_found")
         kind = content_type or mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         headers = [("content-type", kind)]

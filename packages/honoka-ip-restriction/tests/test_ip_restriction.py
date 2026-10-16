@@ -75,3 +75,38 @@ def test_an_async_blocked_hook_and_a_custom_ip_getter() -> None:
 
 def test_an_ipv6_range_does_not_match_an_ipv4_peer() -> None:
     assert status_of(ip_restriction(allow_list=["::/0"]))[0] == 403
+
+
+def test_an_address_that_cannot_be_determined_is_blocked_even_with_only_a_deny_list() -> None:
+    app = App()
+    app.use("*", ip_restriction(deny_list=["10.0.0.0/8"], get_ip=lambda c: None))
+
+    @app.get("/")
+    def home(c: Context) -> Response:
+        return c.text("in")
+
+    with app.test() as client:
+        assert client.get("/").status == 403
+
+
+def test_an_ipv4_mapped_ipv6_peer_is_matched_by_both_forms() -> None:
+    app = App()
+    app.use(
+        "*",
+        ip_restriction(deny_list=["10.0.0.0/8"], get_ip=lambda c: "::ffff:10.1.2.3"),
+    )
+
+    @app.get("/")
+    def home(c: Context) -> Response:
+        return c.text("in")
+
+    mapped = App()
+    mapped.use(
+        "*",
+        ip_restriction(deny_list=["::ffff:10.0.0.0/104"], get_ip=lambda c: "::ffff:10.1.2.3"),
+    )
+    mapped.get("/")(home)
+
+    with app.test() as client, mapped.test() as other:
+        assert client.get("/").status == 403
+        assert other.get("/").status == 403

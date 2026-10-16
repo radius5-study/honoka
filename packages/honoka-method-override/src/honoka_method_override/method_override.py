@@ -5,7 +5,10 @@ from honoka import App
 from honoka.asgi import AsgiMessage, AsgiScope, Receive, Send
 
 _FORM = "application/x-www-form-urlencoded"
-_METHODS = frozenset({"GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS", "POST"})
+# Only the methods an HTML form cannot send. Turning a cross-site POST into a "safe" GET would
+# slip past CSRF checks that trust the method.
+_METHODS = frozenset({"PUT", "PATCH", "DELETE"})
+_MAX_BODY = 64 * 1024
 
 
 def method_override(
@@ -14,6 +17,7 @@ def method_override(
     form: str = "_method",
     header: str | None = None,
     query: str | None = None,
+    max_body: int = _MAX_BODY,
 ) -> Callable[[AsgiScope, Receive, Send], Awaitable[None]]:
     """Let a POST be routed as another method (`<form method=post>` carrying `_method=DELETE`).
 
@@ -24,8 +28,9 @@ def method_override(
 
     Only POST requests are touched. The value comes from the `header` if that option is set,
     else from the `query` parameter if set, else from the urlencoded body field `form`. A value
-    that is not an HTTP method is ignored. When the body is read it is buffered (urlencoded
-    forms are small) and replayed to the app, so handlers still see it."""
+    that is not PUT, PATCH or DELETE is ignored. The form is read only up to `max_body` bytes;
+    what was read is replayed to the app, followed by the rest of the stream, so handlers and
+    `body_limit` still see the whole body."""
 
     async def wrapper(scope: AsgiScope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope["method"] != "POST":
@@ -40,10 +45,14 @@ def method_override(
             qs = parse_qs(raw.decode("latin-1") if isinstance(raw, bytes) else "")
             value = (qs.get(query) or [None])[0]
         elif headers.get("content-type", "").split(";")[0].strip().lower() == _FORM:
-            messages = await _buffer(receive)
+            messages, complete = await _buffer(receive, max_body)
             body = b"".join(_chunk(m) for m in messages)
-            value = (parse_qs(body.decode("utf-8", "replace")).get(form) or [None])[0]
-            receive = _replay(messages)
+            value = (
+                (parse_qs(body.decode("utf-8", "replace")).get(form) or [None])[0]
+                if complete
+                else None
+            )
+            receive = _replay(messages, receive)
         else:
             value = None
         method = value.strip().upper() if value else ""
@@ -71,21 +80,26 @@ def _chunk(message: AsgiMessage) -> bytes:
     return body if isinstance(body, bytes) else b""
 
 
-async def _buffer(receive: Receive) -> list[AsgiMessage]:
+async def _buffer(receive: Receive, limit: int) -> tuple[list[AsgiMessage], bool]:
+    """Read the body up to `limit` bytes. The flag says whether all of it was read."""
     messages: list[AsgiMessage] = []
+    size = 0
     while True:
         message = await receive()
         messages.append(message)
         if message["type"] != "http.request" or not message.get("more_body"):
-            return messages
+            return messages, size + len(_chunk(message)) <= limit
+        size += len(_chunk(message))
+        if size > limit:
+            return messages, False
 
 
-def _replay(messages: list[AsgiMessage]) -> Receive:
+def _replay(messages: list[AsgiMessage], rest: Receive) -> Receive:
     pending = list(messages)
 
     async def receive() -> AsgiMessage:
         if pending:
             return pending.pop(0)
-        return {"type": "http.disconnect"}
+        return await rest()
 
     return receive

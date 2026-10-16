@@ -1,7 +1,7 @@
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Literal, cast, get_origin, overload
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 
 from honoka.asgi import HttpScope, Receive
 from honoka.cookies import cookie_name, unsign
@@ -76,17 +76,21 @@ class Request:
         host = self.header("host")
         if host is None:
             server = self._scope.get("server")
-            host = (
-                "localhost"
-                if not server
-                else f"{server[0]}:{server[1]}"
-                if server[1]
-                else server[0]
-            )
+            host = "localhost"
+            if server:
+                name = f"[{server[0]}]" if ":" in server[0] else server[0]
+                host = f"{name}:{server[1]}" if server[1] else name
         scheme = self._scope.get("scheme", "http")
         root = self._scope.get("root_path", "")
+        raw = self._scope.get("raw_path")
+        # The path as it was sent, so `%3F` stays a path character and does not become a query.
+        path = (
+            raw.decode("latin-1")
+            if isinstance(raw, bytes)
+            else quote(self._path, safe="/:@!$&'()*+,;=-._~")
+        )
         query = self.query_string
-        return f"{scheme}://{host}{root}{self._path}{'?' + query if query else ''}"
+        return f"{scheme}://{host}{root}{path}{'?' + query if query else ''}"
 
     @overload
     def param(self, name: str) -> str: ...

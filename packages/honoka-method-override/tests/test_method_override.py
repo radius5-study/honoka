@@ -110,3 +110,59 @@ def test_only_post_is_overridden() -> None:
     app = method_override(build())
     assert call(app, "GET", "/posts/1?_method=DELETE")[0] == 405
     assert call(app, "PUT", "/posts/1", FORM, b"_method=DELETE") == (200, "put")
+
+
+def test_only_put_patch_and_delete_can_be_the_override() -> None:
+    """A cross-site form that says `_method=GET` must not turn into a "safe" request."""
+    app = App()
+
+    @app.on(["GET", "POST"], "/x")
+    def x(c: Context) -> Response:
+        return c.text(c.req.method)
+
+    wrapped = method_override(app)
+    for forced in ("GET", "HEAD", "OPTIONS", "CONNECT", "TRACE"):
+        got = call(wrapped, "POST", "/x", FORM, f"_method={forced}".encode())
+        assert got == (200, "POST"), forced
+
+
+def test_an_oversized_form_is_not_read_to_the_end_and_still_reaches_the_app_whole() -> None:
+    chunks = 100
+    messages: list[AsgiMessage] = [
+        {"type": "http.request", "body": b"x" * 1024, "more_body": True} for _ in range(chunks)
+    ]
+    messages.append({"type": "http.request", "body": b"", "more_body": False})
+    taken = 0
+    consumed_when_the_app_started: list[int] = []
+    received: list[int] = []
+
+    async def receive() -> AsgiMessage:
+        nonlocal taken
+        taken += 1
+        return messages[taken - 1]
+
+    async def send(message: AsgiMessage) -> None: ...
+
+    app = App()
+
+    @app.post("/upload")
+    async def upload(c: Context) -> Response:
+        consumed_when_the_app_started.append(taken)
+        received.append(len(await c.req.body()))
+        return c.text("ok")
+
+    scope: AsgiScope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/upload",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+    }
+    wrapper = method_override(app, max_body=4096)
+
+    async def run() -> None:
+        await wrapper(scope, receive, send)
+
+    asyncio.run(run())
+    assert consumed_when_the_app_started[0] < chunks // 2  # it did not buffer the whole stream
+    assert received == [chunks * 1024]  # yet the app still got every byte

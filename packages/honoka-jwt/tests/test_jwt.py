@@ -1,5 +1,6 @@
 """jwt sign/verify/decode and the middleware."""
 
+import base64
 import re
 import time
 from typing import cast
@@ -9,6 +10,7 @@ from honoka_jwt import (
     JWT_PAYLOAD,
     Alg,
     JwtAlgorithmNotImplemented,
+    JwtError,
     JwtPayloadRequiresAud,
     JwtTokenAudience,
     JwtTokenExpired,
@@ -123,6 +125,13 @@ def test_middleware_accepts_a_bearer_token_and_exposes_the_payload() -> None:
     assert (resp.status, resp.json()) == (200, {"sub": "u1"})
 
 
+def test_a_well_formed_token_signed_with_another_secret_is_rejected_at_the_signature() -> None:
+    forged = sign({"sub": "admin", "exp": future()}, "not-the-secret")
+    with app_with(jwt(secret=SECRET)).test() as client:
+        resp = client.get("/api/me", headers={"authorization": f"Bearer {forged}"})
+    assert (resp.status, resp.json()) == (401, {"error": "invalid_token"})
+
+
 def test_middleware_rejects_missing_malformed_and_invalid_tokens() -> None:
     expired = sign({"sub": "u", "exp": future(-5)}, SECRET)
     with app_with(jwt(secret=SECRET)).test() as client:
@@ -133,7 +142,7 @@ def test_middleware_rejects_missing_malformed_and_invalid_tokens() -> None:
     assert missing.status == malformed.status == bad.status == forged.status == 401
     assert missing.headers["www-authenticate"] == 'Bearer realm="/api/me"'
     assert 'error="invalid_token"' in bad.headers["www-authenticate"]
-    assert bad.json() == {"error": "invalid_token", "detail": "JwtTokenExpired"}
+    assert bad.json() == {"error": "invalid_token"}
 
 
 def test_middleware_reads_the_cookie_when_configured() -> None:
@@ -155,3 +164,23 @@ def test_custom_header_name_key_alg_realm_and_verification_options() -> None:
     assert resp.headers["www-authenticate"] == 'Bearer realm="r"'
     with app_with(jwt(secret=SECRET, alg="HS512", iss="other")).test() as client:
         assert client.get("/api/me", headers={"authorization": f"Bearer {token}"}).status == 401
+
+
+def test_a_token_with_junk_appended_to_the_signature_is_not_a_second_valid_spelling() -> None:
+    token = sign({"sub": "a"}, "secret")
+    for tampered in (token + "!!!!", token + "=", token + "\n"):
+        with pytest.raises(JwtError):
+            verify(tampered, "secret")
+
+
+def test_absurdly_nested_json_is_an_invalid_token_not_a_crash() -> None:
+    nested = base64.urlsafe_b64encode(b"[" * 100_000).decode().rstrip("=")
+    with pytest.raises(JwtTokenInvalid):
+        verify(f"{nested}.{nested}.AA", "secret")
+
+
+def test_a_nan_expiry_is_refused() -> None:
+    header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip("=")
+    body = base64.urlsafe_b64encode(b'{"exp":NaN}').decode().rstrip("=")
+    with pytest.raises(JwtTokenInvalid):
+        decode(f"{header}.{body}.AA")

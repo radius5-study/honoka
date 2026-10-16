@@ -80,17 +80,28 @@ def _b64e(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
+_B64URL = re.compile(r"[A-Za-z0-9_-]*")
+
+
 def _b64d(text: str) -> bytes:
+    """Strict base64url without padding: a token has exactly one spelling, so appended junk
+    (which a lenient decoder drops) cannot make a second valid token."""
+    if _B64URL.fullmatch(text) is None or len(text) % 4 == 1:
+        raise JwtTokenInvalid("malformed base64url")
     try:
         return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
     except (binascii.Error, ValueError) as exc:
         raise JwtTokenInvalid("malformed base64url") from exc
 
 
+def _reject_constant(name: str) -> object:
+    raise ValueError(f"{name} is not valid JSON")
+
+
 def _json_object(data: bytes) -> Payload:
     try:
-        value: object = json.loads(data)
-    except ValueError as exc:
+        value: object = json.loads(data, parse_constant=_reject_constant)
+    except (ValueError, RecursionError) as exc:  # NaN/Infinity, bad syntax, absurd nesting
         raise JwtTokenInvalid("malformed JSON") from exc
     if not isinstance(value, dict):
         raise JwtTokenInvalid("expected a JSON object")
@@ -211,9 +222,7 @@ def jwt(
             invalid = (
                 f'{challenge},error="invalid_token",error_description="token verification failure"'
             )
-            raise HTTPError(
-                401, "invalid_token", type(exc).__name__, headers=[("www-authenticate", invalid)]
-            ) from exc
+            raise HTTPError(401, "invalid_token", headers=[("www-authenticate", invalid)]) from exc
         c.set(key, payload)
         return await call_next()
 

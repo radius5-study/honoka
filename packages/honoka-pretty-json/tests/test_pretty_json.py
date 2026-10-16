@@ -1,3 +1,6 @@
+import json
+from datetime import UTC, datetime
+
 from honoka_pretty_json import pretty_json
 
 from honoka import App, Context, Middleware, Response
@@ -45,3 +48,24 @@ def test_space_query_and_force() -> None:
 def test_non_json_response_untouched() -> None:
     with _app(pretty_json()).test() as client:
         assert client.get("/t?pretty").text == '{"a":1}'
+
+
+def test_a_custom_json_codec_keeps_working_when_the_response_is_indented() -> None:
+    class DateCodec:
+        def encode(self, obj: object) -> bytes:
+            return json.dumps(obj, default=lambda o: o.isoformat()).encode()
+
+        def decode(self, data: bytes) -> object:
+            return json.loads(data)
+
+    app = App(json_codec=DateCodec())
+    app.use("*", pretty_json())
+
+    @app.get("/")
+    def home(c: Context) -> Response:
+        return c.json({"at": datetime(2026, 10, 17, tzinfo=UTC)})
+
+    with app.test() as client:
+        resp = client.get("/?pretty")
+    assert resp.status == 200
+    assert resp.text == '{\n  "at": "2026-10-17T00:00:00+00:00"\n}'

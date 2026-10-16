@@ -51,7 +51,7 @@ def serve_static(
         rel = requested.lstrip("/")
         if "\0" in rel:
             return await call_next()
-        if not rel or rel.endswith("/") or (Path(root) / rel).is_dir():
+        if not rel or rel.endswith("/") or _is_dir(Path(root) / rel):
             rel = str(Path(rel) / index)
         ext = Path(rel).suffix.lstrip(".").lower()
         kind = extra.get(ext)
@@ -68,6 +68,13 @@ def serve_static(
         return response
 
     return middleware
+
+
+def _is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:  # a name too long for the file system
+        return False
 
 
 def _open(

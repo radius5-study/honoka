@@ -45,7 +45,7 @@ CONVERTERS: dict[str, str] = {
 _ORDER = {name: i for i, name in enumerate(("int", "float", "uuid", "slug", "str", "path"))}
 _REGEX_RANK = 3.5
 _NAME = re.compile(r"[A-Za-z_]\w*")
-_CONVERTER_RE = {name: re.compile(pattern) for name, pattern in CONVERTERS.items()}
+_CONVERTER_RE = {name: re.compile(pattern, re.DOTALL) for name, pattern in CONVERTERS.items()}
 _REGEX_PREFIX = "re:"
 
 
@@ -68,8 +68,36 @@ _compiled_regexes: dict[str, re.Pattern[str]] = {}
 def _regex_of(converter: str) -> re.Pattern[str]:
     found = _CONVERTER_RE.get(converter) or _compiled_regexes.get(converter)
     if found is None:
-        found = _compiled_regexes[converter] = re.compile(_converter_regex(converter))
+        found = _compiled_regexes[converter] = re.compile(_converter_regex(converter), re.DOTALL)
     return found
+
+
+def _context_dependent(regex: str) -> str | None:
+    """Why `regex` would match differently inside the routers' one big expression than on its
+    own, or `None`: anchors and lookbehinds look at what surrounds the parameter."""
+    in_class = False
+    i = 0
+    while i < len(regex):
+        ch = regex[i]
+        if ch == "\\":
+            if regex[i + 1 : i + 2] in ("A", "Z"):
+                return f"\\{regex[i + 1]} anchors to the whole path"
+            i += 2
+            continue
+        if in_class:
+            in_class = ch != "]"
+        elif ch == "[":
+            in_class = True
+            if regex[i + 1 : i + 2] == "^":
+                i += 1
+            if regex[i + 1 : i + 2] == "]":
+                i += 1
+        elif ch in "^$":
+            return f"{ch!r} anchors are implied: the expression always matches the whole segment"
+        elif regex.startswith(("(?<=", "(?<!"), i):
+            return "lookbehind sees the text before the parameter, which differs between routers"
+        i += 1
+    return None
 
 
 def split(path: str) -> list[str]:
@@ -155,9 +183,12 @@ def parse_pattern(pattern: str) -> list[Segment]:
                 raise invalid(f"{part!r} has no valid parameter name")
             if converter.startswith(_REGEX_PREFIX):
                 try:
-                    compiled = re.compile(converter[len(_REGEX_PREFIX) :])
+                    compiled = re.compile(converter[len(_REGEX_PREFIX) :], re.DOTALL)
                 except re.error as exc:
                     raise invalid(f"{part!r} is not a valid regular expression: {exc}") from exc
+                reason = _context_dependent(converter[len(_REGEX_PREFIX) :])
+                if reason is not None:
+                    raise invalid(f"{part!r}: {reason}")
                 if compiled.groups:
                     raise invalid(f"{part!r}: use (?:...) instead of capturing groups")
                 if compiled.fullmatch("") is not None:
@@ -291,7 +322,7 @@ def _compile(root: _Node) -> _Compiled:
             alternatives.append("(?:/.*)?" + mark(node.wildcard, trail))
         return "(?:" + "|".join(alternatives) + ")"
 
-    return _Compiled(re.compile(render(root, ())), routes, params)
+    return _Compiled(re.compile(render(root, ()), re.DOTALL), routes, params)
 
 
 def _regex_matcher(root: _Node) -> Matcher:

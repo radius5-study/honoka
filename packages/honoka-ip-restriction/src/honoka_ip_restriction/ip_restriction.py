@@ -1,6 +1,6 @@
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
-from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
+from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_address, ip_network
 
 from honoka import Context, HTTPError, Middleware, Next, Response
 
@@ -27,16 +27,20 @@ def _rules(rules: Sequence[str]) -> list[Network]:
     return out
 
 
-def _matches(addr: str | None, networks: list[Network]) -> bool:
+def _parse(addr: str | None) -> IPv4Address | IPv6Address | None:
     if addr is None:
-        return False
+        return None
     try:
-        ip = ip_address(addr.partition("%")[0])
+        return ip_address(addr.partition("%")[0])
     except ValueError:
-        return False
-    if ip.version == 6 and ip.ipv4_mapped is not None:  # ::ffff:1.2.3.4 is the IPv4 peer
-        ip = ip.ipv4_mapped
-    return any(ip in net for net in networks)
+        return None
+
+
+def _matches(ip: IPv4Address | IPv6Address, networks: list[Network]) -> bool:
+    candidates = [ip]
+    if isinstance(ip, IPv6Address) and ip.ipv4_mapped is not None:
+        candidates.append(ip.ipv4_mapped)  # ::ffff:1.2.3.4 is also the IPv4 peer 1.2.3.4
+    return any(candidate in net for candidate in candidates for net in networks)
 
 
 def ip_restriction(
@@ -50,14 +54,15 @@ def ip_restriction(
 
     Rules are IPv4/IPv6 addresses, CIDR ranges, or `*`. The deny list is checked first and
     wins; then an address in the allow list passes; otherwise it passes only when the allow list
-    is empty. An address that cannot be determined matches nothing. `get_ip` replaces Hono's
+    is empty. An address that cannot be determined is blocked (fail closed). `get_ip` replaces Hono's
     `getConnInfo`; `on_blocked(addr, c)` replaces the default 403 `HTTPError`."""
     deny = _rules(deny_list)
     allow = _rules(allow_list)
 
     async def middleware(c: Context, call_next: Next) -> Response:
         addr = get_ip(c)
-        if not _matches(addr, deny) and (_matches(addr, allow) or not allow):
+        ip = _parse(addr)
+        if ip is not None and not _matches(ip, deny) and (_matches(ip, allow) or not allow):
             return await call_next()
         if on_blocked is None:
             raise HTTPError(403, "forbidden", "ip address is not allowed")

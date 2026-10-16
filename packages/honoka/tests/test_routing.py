@@ -302,3 +302,30 @@ def test_a_regex_parameter_ranks_between_fixed_converters_and_a_plain_one() -> N
         assert client.get("/c/12").text == "n=12"
         assert client.get("/c/ABC").text == "code=ABC"
         assert client.get("/c/abc").text == "any=abc"
+
+
+def test_newlines_in_a_path_are_matched_the_same_way_by_every_router() -> None:
+    app = App()
+    echo(app, "GET", "/f/{p:path}", "p")
+    echo(app, "GET", "/a/*")
+    with app.test() as client:
+        assert client.get("/f/a\nb").text == "p=a\nb"
+        assert client.get("/a/b\nc").status == 200
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["/u/{id:re:^[0-9]+$}", "/u/{id:re:[0-9]+$}", "/u/{id:re:\\Aabc}", "/u/{id:re:(?<=x)y}"],
+)
+def test_a_regex_that_looks_outside_its_own_segment_is_rejected(pattern: str) -> None:
+    app = App()
+    with pytest.raises(ValueError, match="pattern"):
+        app.get(pattern)(lambda c: c.text(""))
+
+
+def test_a_caret_inside_a_character_class_is_not_an_anchor() -> None:
+    app = App()
+    echo(app, "GET", "/u/{id:re:[^/x]+}", "id")
+    with app.test() as client:
+        assert client.get("/u/12").text == "id=12"
+        assert client.get("/u/x").status == 404

@@ -135,3 +135,25 @@ def test_precompressed(tmp_path: Path) -> None:
     assert plain.body == b"1"
     assert "content-encoding" not in plain.headers
     assert no_variant.text == "hello"
+
+
+def test_a_name_too_long_for_the_file_system_is_a_404_not_a_500(tmp_path: Path) -> None:
+    (tmp_path / "ok.txt").write_text("fine")
+    app = App()
+    app.use("*", serve_static(root=tmp_path))
+    with app.test() as client:
+        assert client.get("/" + "a" * 300).status == 404
+        assert client.get("/a/" + "b" * 300 + "/c.txt").status == 404
+        assert client.get("/ok.txt").text == "fine"
+
+
+def test_a_symlink_that_points_outside_the_root_is_not_served(tmp_path: Path) -> None:
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret")
+    root = tmp_path / "public"
+    root.mkdir()
+    (root / "link.txt").symlink_to(outside)
+    app = App()
+    app.use("*", serve_static(root=root))
+    with app.test() as client:
+        assert client.get("/link.txt").status == 404
