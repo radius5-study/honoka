@@ -38,8 +38,14 @@ Test without a server: `with app.test() as client: client.get("/users/1")`
 ## Packages
 
 `honoka` (core, no dependencies), `honoka-msgspec`, `honoka-openapi`, `honoka-llms`,
-`honoka-cli`, and middleware: `-request-id`, `-logger`, `-timing`, `-secure-headers`,
-`-cors`, `-csrf`, `-body-limit`, `-timeout`, `-trailing-slash`.
+`honoka-cli`, and middleware, one package each:
+
+- observability and plumbing: `-request-id`, `-logger`, `-timing`, `-timeout`, `-body-limit`,
+  `-trailing-slash`, `-powered-by`, `-pretty-json`, `-method-override`, `-language`
+- security: `-secure-headers`, `-cors`, `-csrf`, `-basic-auth`, `-bearer-auth`, `-jwt`,
+  `-ip-restriction`
+- content: `-etag`, `-compress`, `-serve-static`
+- composition: `-combine` (`some`, `every`, `except_`)
 
 ## Development
 
