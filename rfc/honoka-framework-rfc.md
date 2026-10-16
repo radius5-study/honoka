@@ -29,7 +29,7 @@ We will build a web framework that brings the philosophy of Hono (JS) — "a thi
 1. **Context first**: Handlers take only a `Context` argument. This eliminates DI hell
 2. **No dicts at the boundary**: Keep RSGI's `scope` as a handle to the Rust-side object, and convert it to Python lazily on access (lazy binding)
 3. **Synchronous handlers are supported, and safe by default**: `def` handlers run in a worker thread so that blocking I/O cannot stall the event loop. Calling them inline on the loop (which rides on RSGI's `response_str`) is an explicit opt-in (`inline=True`), added only after the PoC benchmark shows it matters
-4. **Keep the core thin**: The core contains no schema validation, OpenAPI, or authentication. These are middleware/plugins; official middleware lives in `honoka-middleware` (see 9.4). The core has no third-party dependencies: JSON goes through a pluggable codec (`App(json_codec=...)`), which is the standard library by default and `MsgspecCodec` from honoka-msgspec for Structs
+4. **Keep the core thin**: The core contains no schema validation, OpenAPI, or authentication. These are middleware/plugins; each official middleware is its own package, e.g. `honoka-cors` (see 9.4). The core has no third-party dependencies: JSON goes through a pluggable codec (`App(json_codec=...)`), which is the standard library by default and `MsgspecCodec` from honoka-msgspec for Structs
 5. **Validation is a single layer**: msgspec only. Do not split it across multiple layers (e.g., Rust-side validation), which would multiply the owners of "correctness". The core only converts scalar path/query parameters (`c.req.param(name, type)`); that is parsing, not schema validation
 6. **Standard type features only**: Do not rely on mypy plugins. Passing under the strictest settings of ty and Pyrefly is a design requirement
 7. **Agent-first**: No implicit context, startup-time checks for everything introspectable (duplicate routes, unused path parameters, missing type hints), `honoka check` in CI for the rest, machine-readable errors, and llms.txt
@@ -253,13 +253,13 @@ A format that lets an agent autonomously follow "what is wrong, how to fix it, a
 ### 9.3 Other
 
 - **llms.txt**: Provide the documentation itself in llms.txt format so that it can be pasted into an agent's context
-- **Official middleware** (Idempotency-Key, rate limiting, API-key authentication, CSRF, CORS, ...): the separate package `honoka-middleware`, not part of the core (see 9.4)
+- **Official middleware** (Idempotency-Key, rate limiting, API-key authentication, CSRF, CORS, ...): one separate package each (`honoka-cors`, `honoka-csrf`, ...), none part of the core (see 9.4)
 - **SSE**: Easily stream progress with `c.stream(async_generator)`
 - **MCP exposure (separate package, future)**: Setting `tool=True` on a route also exposes it as an MCP tool, preventing duplicate HTTP and MCP implementations
 
-### 9.4 Official middleware (`honoka-middleware`)
+### 9.4 Official middleware (one package each)
 
-Selected from Hono's built-in set (basic-auth, bearer-auth, body-limit, cache, combine, compress, context-storage, cors, csrf, etag, ip-restriction, jwk, jwt, language, logger, method-override, mount, request-id, secure-headers, serve-static, timeout, timing, trailing-slash, ...) plus agent-first additions. The middleware is shipped as one package with one module per middleware, so that none of it enters the core.
+Selected from Hono's built-in set (basic-auth, bearer-auth, body-limit, cache, combine, compress, context-storage, cors, csrf, etag, ip-restriction, jwk, jwt, language, logger, method-override, mount, request-id, secure-headers, serve-static, timeout, timing, trailing-slash, ...) plus agent-first additions. Every middleware is its own package named `honoka-<name>` (import `honoka_<name>`), so an app installs only what it uses, each can carry its own dependencies, and none of it enters the core. Packages may depend on each other when one reads another's typed key (`honoka-logger` reads the id from `honoka-request-id`).
 
 | Tier | Middleware | Notes |
 |---|---|---|
@@ -270,7 +270,7 @@ Selected from Hono's built-in set (basic-auth, bearer-auth, body-limit, cache, c
 
 ### 9.5 Helpers
 
-Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, factory, html, proxy, route, ssg, streaming, testing, websocket, plus the JWT helper). Helpers that every app needs are methods on `Context`/`Request` in the core; the rest are not adopted or live in `honoka-middleware`.
+Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, factory, html, proxy, route, ssg, streaming, testing, websocket, plus the JWT helper). Helpers that every app needs are methods on `Context`/`Request` in the core; the rest are not adopted or live in separate packages.
 
 | Tier | Helper | Form |
 |---|---|---|
@@ -282,7 +282,7 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 | v1 (core) | streaming | `c.stream(...)` over `response_stream`; the SSE helper `c.sse(...)` follows in v2 |
 | v1 (CLI) | dev | `honoka routes` prints `app.route_table()` (Hono's `showRoutes`) |
 | v0/v1 | testing | `app.test()` (see 12.3) |
-| v2 (`honoka-middleware`) | signed cookies, JWT `sign`/`verify`/`decode` | Take a secret/key supplied by the user |
+| v2 (separate packages) | signed cookies, JWT `sign`/`verify`/`decode` | Take a secret/key supplied by the user |
 | v3 | websocket | Formal design with WebSocket/SSE (see 12.1) |
 | Not adopted | factory | Decorators return the function unchanged and `Context` has no type parameters, so `Handler`, `Middleware`, and `Next` type aliases are enough |
 | Not adopted | adapter | Granian only; the ASGI adapter is a separate concern (4.3) |
@@ -294,7 +294,7 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 honoka            … routing, Context, middleware execution, responses, honoka check
 honoka-msgspec    … validator(), structured 400
 honoka-openapi    … schema collection, /openapi.json, Scalar serving
-honoka-middleware … official middleware (9.4)
+honoka-<name>     … one package per official middleware (9.4): request-id, logger, timing, secure-headers, cors, csrf, body-limit, timeout, trailing-slash, ...
 honoka-mcp        … MCP exposure (future)
 ```
 
@@ -305,8 +305,8 @@ honoka-mcp        … MCP exposure (future)
   2. Verify `Key[T]`, `c.req.valid(T)`, and `Json[T]` in both checkers (`ok.py` / `bad.py`)
   3. Implement the lazy-binding Context on Granian/RSGI
   4. Build the benchmark harness (see 11.1) and a minimal implementation (static routing, `Json[T]` returns, a `Context` that can be constructed without RSGI); measure the cost of the Context abstraction against bare RSGI and the other frameworks
-- **v1**: Complete the core (middleware, error handling, synchronous handlers), honoka-msgspec, honoka-openapi (Scalar), honoka check, honoka-middleware (v1 tier of 9.4), a minimal `app.test()`
-- **v2**: ASGI adapter, honoka-middleware v2 tiers (authentication, idempotency, rate limiting, ...), full test client
+- **v1**: Complete the core (middleware, error handling, synchronous handlers), honoka-msgspec, honoka-openapi (Scalar), honoka check, the v1 middleware packages of 9.4, a minimal `app.test()`
+- **v2**: ASGI adapter, the v2 middleware packages (authentication, idempotency, rate limiting, ...), full test client
 - **v3 and later**: Formal design of WebSocket/SSE, honoka-mcp
 
 ### 11.1 Benchmark policy

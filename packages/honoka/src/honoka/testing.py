@@ -2,7 +2,7 @@
 
 import asyncio
 import json as jsonlib
-from collections.abc import Coroutine, Iterable, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
 
@@ -68,6 +68,10 @@ class _Proto:
 
     async def __call__(self) -> bytes:
         return self._body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for start in range(0, len(self._body), 4):
+            yield self._body[start : start + 4]
 
     def response_empty(self, status: int, headers: list[tuple[str, str]], /) -> None:
         self.response = ClientResponse(status, headers, b"")

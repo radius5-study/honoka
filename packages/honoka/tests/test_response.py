@@ -111,3 +111,25 @@ def test_head_on_a_streaming_route_sends_headers_but_no_chunks() -> None:
 
     assert (resp.status, resp.body) == (200, b"")
     assert resp.headers["content-type"] == "text/plain"
+
+
+def test_redirect_sets_the_location_and_rejects_header_injection() -> None:
+    app = App()
+
+    @app.get("/go")
+    def go(c: Context) -> Response:
+        return c.redirect("/there", 301)
+
+    @app.get("/bad")
+    def bad(c: Context) -> Response:
+        try:
+            return c.redirect("/x\r\nset-cookie: a=b")
+        except ValueError:
+            return c.text("rejected")
+
+    with app.test() as client:
+        moved = client.get("/go")
+        rejected = client.get("/bad")
+
+    assert (moved.status, moved.headers["location"]) == (301, "/there")
+    assert rejected.text == "rejected"

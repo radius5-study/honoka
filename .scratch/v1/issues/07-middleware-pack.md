@@ -1,7 +1,7 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 
-# 07: honoka-middleware v1 tier
+# 07: v1 middleware, one package each
 
 logger, request_id, timing, cors, csrf, secure_headers, body_limit, timeout, trailing_slash (one behavior at a time, RFC 9.4).
 

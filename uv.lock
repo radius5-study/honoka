@@ -5,7 +5,16 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "honoka",
+    "honoka-body-limit",
+    "honoka-cors",
+    "honoka-csrf",
+    "honoka-logger",
     "honoka-msgspec",
+    "honoka-request-id",
+    "honoka-secure-headers",
+    "honoka-timeout",
+    "honoka-timing",
+    "honoka-trailing-slash",
 ]
 
 [manifest.dependency-groups]
@@ -134,6 +143,54 @@ version = "0.1.0"
 source = { editable = "packages/honoka" }
 
 [[package]]
+name = "honoka-body-limit"
+version = "0.1.0"
+source = { editable = "packages/honoka-body-limit" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-cors"
+version = "0.1.0"
+source = { editable = "packages/honoka-cors" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-csrf"
+version = "0.1.0"
+source = { editable = "packages/honoka-csrf" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-logger"
+version = "0.1.0"
+source = { editable = "packages/honoka-logger" }
+dependencies = [
+    { name = "honoka" },
+    { name = "honoka-request-id" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "honoka", editable = "packages/honoka" },
+    { name = "honoka-request-id", editable = "packages/honoka-request-id" },
+]
+
+[[package]]
 name = "honoka-msgspec"
 version = "0.1.0"
 source = { editable = "packages/honoka-msgspec" }
@@ -147,6 +204,61 @@ requires-dist = [
     { name = "honoka", editable = "packages/honoka" },
     { name = "msgspec", specifier = ">=0.22.0" },
 ]
+
+[[package]]
+name = "honoka-request-id"
+version = "0.1.0"
+source = { editable = "packages/honoka-request-id" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-secure-headers"
+version = "0.1.0"
+source = { editable = "packages/honoka-secure-headers" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-timeout"
+version = "0.1.0"
+source = { editable = "packages/honoka-timeout" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-timing"
+version = "0.1.0"
+source = { editable = "packages/honoka-timing" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-trailing-slash"
+version = "0.1.0"
+source = { editable = "packages/honoka-trailing-slash" }
+dependencies = [
+    { name = "honoka" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
 
 [[package]]
 name = "httpcore"

@@ -65,6 +65,11 @@ class Context:
     def html(self, body: str, status: int = 200) -> Response:
         return Response(body.encode(), status, [("content-type", "text/html; charset=utf-8")])
 
+    def redirect(self, location: str, status: int = 302) -> Response:
+        if "\r" in location or "\n" in location:
+            raise ValueError("redirect location must not contain line breaks")
+        return Response(b"", status, [("location", location)])
+
     def stream(
         self,
         chunks: AsyncIterable[str | bytes],

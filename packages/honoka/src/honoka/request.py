@@ -9,7 +9,17 @@ from honoka.json import JsonCodec
 
 
 class Request:
-    __slots__ = ("_body", "_codec", "_cookies", "_params", "_proto", "_query", "_scope", "_valid")
+    __slots__ = (
+        "_body",
+        "_body_limit",
+        "_codec",
+        "_cookies",
+        "_params",
+        "_proto",
+        "_query",
+        "_scope",
+        "_valid",
+    )
 
     def __init__(
         self, scope: Scope, proto: Proto, params: Mapping[str, str], codec: JsonCodec
@@ -22,6 +32,7 @@ class Request:
         self._cookies: dict[str, str] | None = None
         self._body: bytes | None = None
         self._valid: dict[str, object] = {}
+        self._body_limit: int | None = None
 
     @property
     def method(self) -> str:
@@ -63,6 +74,10 @@ class Request:
             ) from None
 
     @property
+    def query_string(self) -> str:
+        return self._scope.query_string
+
+    @property
     def params(self) -> Mapping[str, str]:
         """All path parameters, unconverted."""
         return self._params
@@ -101,9 +116,21 @@ class Request:
                 best, best_quality = offer, quality
         return best
 
+    def limit_body(self, max_bytes: int) -> None:
+        """Make `body()` fail with 413 once more than `max_bytes` arrive."""
+        self._body_limit = max_bytes
+
     async def body(self) -> bytes:
         if self._body is None:
-            self._body = await self._proto()
+            if self._body_limit is None:
+                self._body = await self._proto()
+            else:
+                received = bytearray()
+                async for chunk in self._proto:
+                    received += chunk
+                    if len(received) > self._body_limit:
+                        raise HTTPError(413, "payload_too_large")
+                self._body = bytes(received)
         return self._body
 
     async def json(self) -> object:

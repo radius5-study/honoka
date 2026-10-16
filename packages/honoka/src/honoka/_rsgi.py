@@ -1,6 +1,6 @@
 """The slice of Granian's RSGI interface that honoka relies on, as structural types."""
 
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from typing import Protocol
 
 
@@ -33,6 +33,8 @@ class StreamTransport(Protocol):
 
 class Proto(Protocol):
     async def __call__(self) -> bytes: ...
+
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
 
     def response_empty(self, status: int, headers: list[tuple[str, str]], /) -> None: ...
 
