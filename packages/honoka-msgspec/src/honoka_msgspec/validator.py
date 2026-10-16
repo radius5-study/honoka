@@ -88,13 +88,23 @@ class Validator:
             "form": form,
         }
         self.schemas: dict[str, object] = {t: s for t, s in given.items() if s is not None}
+        # Resolved once here: msgspec.structs.fields() re-evaluates annotations on every call.
+        self._structs: dict[str, type[msgspec.Struct]] = {}
         for target in _FIELD_TARGETS:
             schema = self.schemas.get(target)
-            if schema is not None and not (
-                isinstance(schema, type) and issubclass(schema, msgspec.Struct)
-            ):
-                raise TypeError(f"{target} must be a msgspec.Struct subclass, got {schema!r}")
+            if schema is None:
+                continue
+            if not (isinstance(schema, type) and issubclass(schema, msgspec.Struct)):
+                message = f"{target} must be a msgspec.Struct subclass, got {schema!r}"
+                raise TypeError(message)
+            self._structs[target] = schema
         self._openapi_url = openapi_url
+        self._fields: dict[str, tuple[tuple[str, bool], ...]] = {
+            target: tuple(
+                (f.encode_name, _wants_sequence(f.type)) for f in msgspec.structs.fields(struct)
+            )
+            for target, struct in self._structs.items()
+        }
         self._json = msgspec.json.Decoder(json) if json is not None else None
 
     async def __call__(self, c: Context, call_next: Next) -> Response:
@@ -109,9 +119,9 @@ class Validator:
     async def _validate(self, c: Context, target: str, schema: object) -> object:
         if target == "json":
             return await self._validate_json(c, schema)
-        raw = await self._raw(c, target, schema)
+        raw = await self._raw(c, target)
         try:
-            return msgspec.convert(raw, schema, strict=False)  # type: ignore[arg-type]
+            return msgspec.convert(raw, self._structs[target], strict=False)
         except msgspec.ValidationError as exc:
             raise ValidationFailed(
                 [_field_error(target, exc, raw)], self._schema_ref(schema)
@@ -130,9 +140,7 @@ class Validator:
         except msgspec.DecodeError as exc:
             raise HTTPError(400, "invalid_json", str(exc)) from exc
 
-    async def _raw(self, c: Context, target: str, schema: object) -> Mapping[str, object]:
-        assert isinstance(schema, type) and issubclass(schema, msgspec.Struct)
-        fields = msgspec.structs.fields(schema)
+    async def _raw(self, c: Context, target: str) -> Mapping[str, object]:
         raw: dict[str, object] = {}
         items: list[tuple[str, str]] = []
         if target == "form":
@@ -140,8 +148,7 @@ class Validator:
             if not content_type.startswith("application/x-www-form-urlencoded"):
                 raise HTTPError(415, "unsupported_media_type", "expected a urlencoded form")
             items = parse_qsl((await c.req.body()).decode(), keep_blank_values=True)
-        for field in fields:
-            key = field.encode_name
+        for key, is_sequence in self._fields[target]:
             values: list[str]
             if target == "query":
                 values = c.req.queries(key)
@@ -156,7 +163,7 @@ class Validator:
                 cookie = c.req.cookie(key)
                 values = [] if cookie is None else [cookie]
             if values:
-                raw[key] = values if _wants_sequence(field.type) else values[0]
+                raw[key] = values if is_sequence else values[0]
         return raw
 
 

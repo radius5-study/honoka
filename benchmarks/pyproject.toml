@@ -1,0 +1,32 @@
+[project]
+name = "honoka-benchmarks"
+version = "0.1.0"
+description = "Benchmark harness comparing honoka with other Python web frameworks"
+authors = [
+    { name = "L4Ph", email = "me@l4ph.moe" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "blacksheep>=2.6.4",
+    "falcon>=4.4.0",
+    "fastapi>=0.143.3",
+    "granian>=2.8.4",
+    "honoka",
+    "honoka-cors",
+    "honoka-msgspec",
+    "honoka-request-id",
+    "litestar>=2.24.0",
+    "msgspec>=0.22.0",
+    "robyn>=0.88.0",
+    "starlette>=1.8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+honoka = { workspace = true }
+honoka-msgspec = { workspace = true }
+honoka-cors = { workspace = true }
+honoka-request-id = { workspace = true }
