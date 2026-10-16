@@ -27,7 +27,7 @@ async def create_user(c: Context) -> Json[NewUser]:
 ```
 
 ```sh
-granian --interface asgi app:app      # or uvicorn; on Workers: asgi.entrypoint(app)
+granian --interface asgi app:app      # or uvicorn; on Workers: App(threads=False), asgi.entrypoint(app)
 honoka routes app                     # list routes
 honoka check app                      # find handlers that read data no validator provides
 ```

@@ -2,7 +2,6 @@
 
 import asyncio
 import inspect
-import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -32,9 +31,6 @@ if TYPE_CHECKING:
 
 
 type Hook = Callable[[], Awaitable[None] | None]
-
-# Pyodide (Cloudflare Python Workers) cannot start threads: `def` handlers must run inline there.
-NO_THREADS = sys.platform == "emscripten"
 
 # The router every App uses unless it is given `router=`; tests swap it to run on each router.
 DEFAULT_ROUTER: RouterFactory = SmartRouter
@@ -86,11 +82,15 @@ class App:
         json_codec: JsonCodec = STDLIB_JSON,
         strict: bool = True,
         router: RouterFactory | None = None,
+        threads: bool = True,
     ) -> None:
         """`strict=False` makes `/a` and `/a/` the same path (Hono's `strict` option). `router`
-        picks the matching strategy: `SmartRouter` (default), `RegExpRouter` or `TrieRouter`."""
+        picks the matching strategy: `SmartRouter` (default), `RegExpRouter` or `TrieRouter`.
+        `threads=False` runs `def` handlers on the event loop, for hosts without threads
+        (Cloudflare Python Workers)."""
         self._codec = json_codec
         self._strict = strict
+        self._threads = threads
         self._router_factory = DEFAULT_ROUTER if router is None else router
         self._routes: list[Route] = []
         self._middlewares: list[tuple[str, Middleware]] = []
@@ -298,7 +298,7 @@ class App:
         if _is_async(handler):
             # An `async def` handler already is `(Context) -> Awaitable[Response]`.
             return cast("Chain", handler)
-        if inline or NO_THREADS:
+        if inline or not self._threads:
 
             async def run_inline(c: Context) -> Response:
                 result = handler(c)

@@ -81,7 +81,7 @@ The app object is the ASGI callable. There is no adapter layer and no second int
 
 - **Granian / uvicorn**: `granian --interface asgi app:app`. Lifespan is handled: startup and shutdown hooks run when the server announces them
 - **Cloudflare Python Workers**: `from workers import asgi; Default = asgi.entrypoint(app)`. There is no lifespan, so startup hooks run lazily once, on the first request, under a lock
-- **No threads on Pyodide**: `NO_THREADS` (true on `emscripten`) makes plain `def` handlers run inline. `c.file` reads the bytes there; there is no disk
+- **No threads on Pyodide**: the app says so explicitly, `App(threads=False)`, and plain `def` handlers then run on the event loop. Nothing sniffs the platform. `c.file` reads the bytes there; there is no disk
 - **WebSocket** scopes are closed with 1000 until v3
 - **Open**: the Pyodide version Workers pins decides which msgspec the validator can use (Pyodide ships 0.19-0.20); verify before the first deploy
 - **Open**: `c.file` reads the whole file into memory. Servers that offer the `http.response.pathsend` extension (Granian does, to be verified) could send the file themselves

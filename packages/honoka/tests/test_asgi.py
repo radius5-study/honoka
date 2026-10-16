@@ -247,14 +247,11 @@ def test_a_failing_startup_hook_is_reported_to_the_asgi_server() -> None:
         asyncio.run(_Lifespan(app).startup())
 
 
-def test_without_threads_sync_handlers_run_inline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pyodide (Cloudflare Python Workers) cannot start threads, so `def` handlers must not try."""
+def test_with_threads_off_sync_handlers_run_on_the_loop() -> None:
+    """Cloudflare Python Workers cannot start threads, so `App(threads=False)` is how to say so."""
     import threading
 
-    from honoka import app as app_module
-
-    monkeypatch.setattr(app_module, "NO_THREADS", True)
-    app = App()
+    app = App(threads=False)
     seen: dict[str, int] = {}
 
     @app.get("/loop")
