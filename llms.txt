@@ -1,0 +1,7 @@
+# honoka
+
+> A Hono-style web framework for Python 3.13+. Thin core around `Context`, one package per middleware, msgspec validation, OpenAPI. Serves RSGI (Granian), ASGI, and Cloudflare Python Workers.
+
+- [README](README.md): quickstart, commands, package list
+- [RFC](rfc/honoka-framework-rfc.md): design, API, middleware, roadmap
+- [Benchmarks](benchmarks/README.md): method and results
