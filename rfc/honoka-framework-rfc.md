@@ -281,7 +281,7 @@ Selected from Hono's built-in set (basic-auth, bearer-auth, body-limit, cache, c
 
 | Tier | Middleware | Notes |
 |---|---|---|
-| v1 | `logger`, `request_id`, `cors`, `csrf`, `secure_headers`, `body_limit`, `timeout`, `timing`, `trailing_slash` | `csrf` follows Hono (Origin / `Sec-Fetch-Site` check for form-like content types). `body_limit` must be enforced while the body is read, because RSGI hands over the full body. `timing` emits `Server-Timing`. 405/HEAD/OPTIONS handling is core behavior, not middleware |
+| v1 | `logger`, `request_id`, `cors`, `csrf`, `secure_headers`, `body_limit`, `timeout`, `timing`, `trailing_slash` | `csrf` follows Hono (Origin / `Sec-Fetch-Site` check for form-like content types). `body_limit` must be enforced while the body is read, so that an oversized body is rejected before it is all in memory. `timing` emits `Server-Timing`. 405/HEAD/OPTIONS handling is core behavior, not middleware |
 | v2 | `basic_auth`, `bearer_auth`, `jwt`/`jwk`, `ip_restriction`, `etag`/`cache`, `serve_static`, `combine` (some/every/except), `compress` (a reverse proxy is preferred), `mount` (with the ASGI adapter) | Authentication takes a user-supplied verifier and sets a typed key |
 | v2 (agent-first) | `idempotency_key`, `rate_limit`, `api_key` | They need a store (in-memory by default, pluggable); idempotency must handle concurrent duplicates and payload mismatches |
 | Not adopted | `context_storage` (typed keys replace it), `jsx_renderer`, `language`, `method_override`, `powered_by`, `pretty_json` | Not needed for an API-first framework |
