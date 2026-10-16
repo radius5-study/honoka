@@ -1,6 +1,7 @@
 """The app served by real Granian in test_granian.py."""
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from honoka import App, Context, Json, Key, Next, Response
 
@@ -57,3 +58,18 @@ async def stream(c: Context) -> Response:
 @app.get("/boom")
 def boom(c: Context) -> Response:
     raise RuntimeError("secret")
+
+
+@app.get("/file")
+def file(c: Context) -> Response:
+    return c.file(Path(__file__).parent / "data" / "hello.txt", filename="greeting.txt")
+
+
+@app.get("/typed/{n:int}")
+def typed(c: Context) -> Response:
+    return c.text(str(c.req.param("n", int) + 1))
+
+
+@app.get("/wild/*")
+def wild(c: Context) -> Response:
+    return c.text(c.req.path)

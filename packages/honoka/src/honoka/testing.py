@@ -3,6 +3,7 @@
 import asyncio
 import json as jsonlib
 from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
+from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
 
@@ -78,6 +79,9 @@ class _Proto:
 
     def response_bytes(self, status: int, headers: list[tuple[str, str]], body: bytes, /) -> None:
         self.response = ClientResponse(status, headers, body)
+
+    def response_file(self, status: int, headers: list[tuple[str, str]], file: str, /) -> None:
+        self.response = ClientResponse(status, headers, Path(file).read_bytes())
 
     def response_stream(self, status: int, headers: list[tuple[str, str]], /) -> _Transport:
         self.response = ClientResponse(status, headers, b"")

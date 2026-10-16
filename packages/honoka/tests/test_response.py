@@ -1,6 +1,7 @@
 """Response-side helpers: cookies and streaming, via the public test client."""
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from honoka import App, Context, Response
 
@@ -133,3 +134,62 @@ def test_redirect_sets_the_location_and_rejects_header_injection() -> None:
 
     assert (moved.status, moved.headers["location"]) == (301, "/there")
     assert rejected.text == "rejected"
+
+
+def file_app(root: Path) -> App:
+    app = App()
+
+    @app.get("/report")
+    def report(c: Context) -> Response:
+        return c.file(root / "report.csv", filename="売上 2026.csv")
+
+    @app.get("/public/{name}")
+    def public(c: Context) -> Response:
+        return c.file(c.req.param("name"), root=root / "public")
+
+    @app.get("/raw")
+    def raw(c: Context) -> Response:
+        return c.file(root / "blob")
+
+    return app
+
+
+def make_files(tmp_path: Path) -> Path:
+    (tmp_path / "public").mkdir()
+    (tmp_path / "public" / "hello.txt").write_text("hi")
+    (tmp_path / "report.csv").write_text("a,b\n1,2\n")
+    (tmp_path / "secret.txt").write_text("secret")
+    (tmp_path / "blob").write_bytes(b"\x00\x01")
+    return tmp_path
+
+
+def test_a_file_is_sent_with_a_guessed_type_and_a_download_name(tmp_path: Path) -> None:
+    with file_app(make_files(tmp_path)).test() as client:
+        resp = client.get("/report")
+    assert resp.body == b"a,b\n1,2\n"
+    assert resp.headers["content-type"] == "text/csv"
+    assert resp.headers["content-disposition"] == (
+        "attachment; filename*=UTF-8''%E5%A3%B2%E4%B8%8A%202026.csv"
+    )
+
+
+def test_an_unknown_extension_is_sent_as_octet_stream(tmp_path: Path) -> None:
+    with file_app(make_files(tmp_path)).test() as client:
+        resp = client.get("/raw")
+    assert (resp.body, resp.headers["content-type"]) == (b"\x00\x01", "application/octet-stream")
+
+
+def test_a_file_below_the_root_is_served_and_a_path_that_escapes_it_is_a_404(
+    tmp_path: Path,
+) -> None:
+    with file_app(make_files(tmp_path)).test() as client:
+        assert client.get("/public/hello.txt").text == "hi"
+        assert client.get("/public/..%2Fsecret.txt").status == 404
+        assert client.get("/public/missing.txt").status == 404
+
+
+def test_head_on_a_file_route_sends_no_body(tmp_path: Path) -> None:
+    with file_app(make_files(tmp_path)).test() as client:
+        resp = client.request("HEAD", "/report")
+    assert (resp.status, resp.body) == (200, b"")
+    assert resp.headers["content-type"] == "text/csv"

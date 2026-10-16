@@ -58,3 +58,15 @@ class Stream(Response):
     ) -> None:
         super().__init__(b"", status, headers)
         self.chunks = chunks
+
+
+class FileResponse(Response):
+    """A file on disk, sent by the server itself (Granian streams it without Python copying it)."""
+
+    __slots__ = ("path",)
+
+    def __init__(
+        self, path: str, status: int = 200, headers: list[tuple[str, str]] | None = None
+    ) -> None:
+        super().__init__(b"", status, headers)
+        self.path = path

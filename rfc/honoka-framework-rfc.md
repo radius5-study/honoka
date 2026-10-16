@@ -43,7 +43,7 @@ Client
 Granian (Rust: tokio + hyper)
    ↕ RSGI (primary target) / ASGI (compatibility layer)
 honoka core
-   ├─ Routing (pure Python in v0/v1; Rust only if benchmarks justify it, see 12.2)
+   ├─ Routing (RegExpRouter style in pure Python: one compiled regex per method; Rust only if benchmarks justify it, see 12.2)
    ├─ Context (lazy binding)
    └─ Middleware onion execution
    ↕
@@ -103,6 +103,10 @@ async def get_user(c: Context) -> Json[User]:
 - `c.req.param(name, type)` raises a structured 400 when the conversion fails
 - Route groups: `app.route("/users", users_app)` mounts a sub-app under a prefix (Hono's `app.route`)
 - Lifecycle: `@app.on_startup` / `@app.on_shutdown` hooks create and close app-wide resources (e.g., DB pools), which are published with `app.provide(KEY, value)`
+- Methods: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`; `app.on(["GET", "POST"], path)` registers one handler for several methods and `app.all(path)` for every common one
+- Route patterns: a segment is a literal, `{name}` (any non-empty text), `{name:int|float|uuid|slug}`, `{rest:path}` (the rest of the path, last segment only), or a trailing `*` (the prefix itself and everything below it). A value a converter rejects is a 404, not a 400. Priority at one position: literal, then typed parameter (most specific first), then `{name}`, then `path`, then `*`. A bad pattern raises `ValueError` when the route is declared
+- Trailing slash: strict by default (`/a/` is not `/a`); `App(strict=False)` treats them as one path, as in Hono
+- Router: paths without parameters are a dict lookup; the others are folded into a trie and compiled into one regular expression per method (Hono's RegExpRouter). CPython sizes each match result by the number of capture groups, so past 100 parameterised routes per method the router walks the trie instead (Hono's SmartRouter makes the same trade). Both strategies must give identical answers and share one test suite
 - Route metadata: decorators accept extra keyword options (e.g., `responses={...}`, `tool=True`) and store them in `app.route_table()`. The core never interprets them; plugins do
 
 ### 5.2 Context
@@ -279,6 +283,7 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 | v1 (core) | conninfo | `c.req.client` (remote address from the RSGI scope) |
 | v1 (core) | route | `c.route` (the matched route template, e.g. `/users/{user_id}`), used by logger/metrics so that labels stay low-cardinality |
 | v1 (core) | html | `c.html(str)` (needed for the docs page; no template DSL) |
+| v1 (core) | file | `c.file(path, root=..., filename=...)`: the server streams the file from disk. Pass `root` when `path` comes from a request, so `../` and absolute paths are a 404 |
 | v1 (core) | streaming | `c.stream(...)` over `response_stream`; the SSE helper `c.sse(...)` follows in v2 |
 | v1 (CLI) | dev | `honoka routes` prints `app.route_table()` (Hono's `showRoutes`) |
 | v0/v1 | testing | `app.test()` (see 12.3) |

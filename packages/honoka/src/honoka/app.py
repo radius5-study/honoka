@@ -2,7 +2,7 @@
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
 
 from honoka._rsgi import Proto, Scope
@@ -10,8 +10,17 @@ from honoka.context import Context, Key
 from honoka.errors import HTTPError, default_error_response
 from honoka.json import STDLIB_JSON, JsonCodec
 from honoka.request import Request
-from honoka.response import Response, Stream
-from honoka.router import NO_PARAMS, Chain, Route, RouteInfo, Router, split
+from honoka.response import FileResponse, Response, Stream
+from honoka.router import (
+    NO_PARAMS,
+    Chain,
+    Route,
+    RouteInfo,
+    Router,
+    normalize,
+    parse_pattern,
+    split,
+)
 from honoka.types import Handler, Middleware, Next
 
 if TYPE_CHECKING:
@@ -19,6 +28,8 @@ if TYPE_CHECKING:
 
 
 type Hook = Callable[[], Awaitable[None] | None]
+
+ALL_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 
 
 class _Next:
@@ -51,6 +62,7 @@ def _matches(pattern: str, target: str) -> bool:
     """Whether the middleware `pattern` (`/api/*`, `/admin`, `*`) applies to `target`."""
     if pattern in ("*", "/*"):
         return True
+    pattern, target = normalize(pattern), normalize(target)
     wildcard = pattern.endswith("/*")
     base = split(pattern[:-2] if wildcard else pattern)
     parts = split(target)
@@ -58,8 +70,10 @@ def _matches(pattern: str, target: str) -> bool:
 
 
 class App:
-    def __init__(self, *, json_codec: JsonCodec = STDLIB_JSON) -> None:
+    def __init__(self, *, json_codec: JsonCodec = STDLIB_JSON, strict: bool = True) -> None:
+        """`strict=False` makes `/a` and `/a/` the same path (Hono's `strict` option)."""
         self._codec = json_codec
+        self._strict = strict
         self._routes: list[Route] = []
         self._middlewares: list[tuple[str, Middleware]] = []
         self._on_error: Handler | None = None
@@ -75,25 +89,34 @@ class App:
 
     def _route[H: Handler](
         self,
-        method: str,
+        methods: Sequence[str],
         path: str,
         middleware: tuple[Middleware, ...],
         inline: bool,
         meta: Mapping[str, object],
     ) -> Callable[[H], H]:
+        verbs = tuple(dict.fromkeys(m.upper() for m in methods))
+        if not verbs:
+            raise ValueError("a route needs at least one HTTP method")
+        parse_pattern(path)  # a bad pattern fails here, at the decorator, not on a request
+
         def decorator(handler: H) -> H:
-            self._add(Route(method, path, handler, middleware, inline, dict(meta)))
+            for verb in verbs:
+                self._add(Route(verb, path, handler, middleware, inline, dict(meta)))
             return handler
 
         return decorator
 
     def _add(self, route: Route) -> None:
-        if (route.method, route.pattern) in self._seen:
+        pattern = route.pattern
+        if not self._strict and len(pattern) > 1 and pattern.endswith("/"):
+            pattern = pattern[:-1]
+        if (route.method, pattern) in self._seen:
             raise ValueError(f"duplicate route: {route.method} {route.pattern}")
         for mw in route.middleware:
             if not _is_async(mw):
                 raise TypeError(f"middleware {mw!r} must be an async function")
-        self._seen.add((route.method, route.pattern))
+        self._seen.add((route.method, pattern))
         self._routes.append(route)
         self._router = None
 
@@ -147,27 +170,55 @@ class App:
     def get[H: Handler](
         self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
     ) -> Callable[[H], H]:
-        return self._route("GET", path, middleware, inline, meta)
+        return self._route(("GET",), path, middleware, inline, meta)
 
     def post[H: Handler](
         self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
     ) -> Callable[[H], H]:
-        return self._route("POST", path, middleware, inline, meta)
+        return self._route(("POST",), path, middleware, inline, meta)
 
     def put[H: Handler](
         self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
     ) -> Callable[[H], H]:
-        return self._route("PUT", path, middleware, inline, meta)
+        return self._route(("PUT",), path, middleware, inline, meta)
 
     def patch[H: Handler](
         self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
     ) -> Callable[[H], H]:
-        return self._route("PATCH", path, middleware, inline, meta)
+        return self._route(("PATCH",), path, middleware, inline, meta)
 
     def delete[H: Handler](
         self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
     ) -> Callable[[H], H]:
-        return self._route("DELETE", path, middleware, inline, meta)
+        return self._route(("DELETE",), path, middleware, inline, meta)
+
+    def head[H: Handler](
+        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
+    ) -> Callable[[H], H]:
+        return self._route(("HEAD",), path, middleware, inline, meta)
+
+    def options[H: Handler](
+        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
+    ) -> Callable[[H], H]:
+        return self._route(("OPTIONS",), path, middleware, inline, meta)
+
+    def on[H: Handler](
+        self,
+        methods: str | Sequence[str],
+        path: str,
+        *middleware: Middleware,
+        inline: bool = False,
+        **meta: object,
+    ) -> Callable[[H], H]:
+        """Register one handler for several methods: `@app.on(["GET", "POST"], "/form")`."""
+        verbs = (methods,) if isinstance(methods, str) else tuple(methods)
+        return self._route(verbs, path, middleware, inline, meta)
+
+    def all[H: Handler](
+        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
+    ) -> Callable[[H], H]:
+        """Register one handler for every common method (not `CONNECT` or `TRACE`)."""
+        return self._route(ALL_METHODS, path, middleware, inline, meta)
 
     def use(self, path: str, middleware: Middleware) -> None:
         """Wrap every route (and unmatched request) whose path matches `path`, e.g. `/api/*`."""
@@ -268,7 +319,7 @@ class App:
         return run
 
     def _compile(self) -> Router:
-        router = Router()
+        router = Router(strict=self._strict)
         for route in self._routes:
             applicable = [
                 mw for pattern, mw in self._middlewares if _matches(pattern, route.pattern)
@@ -276,6 +327,7 @@ class App:
             applicable.extend(route.middleware)
             route.chain = self._compose(applicable, self._endpoint(route.handler, route.inline))
             router.add(route)
+        router.compile()
         self._router = router
         return router
 
@@ -308,6 +360,11 @@ class App:
                 proto.response_empty(response.status, response.headers)
             else:
                 await self._send_stream(proto, response)
+        elif isinstance(response, FileResponse):
+            if head:
+                proto.response_empty(response.status, response.headers)
+            else:
+                proto.response_file(response.status, response.headers, response.path)
         elif response.body:
             proto.response_bytes(response.status, response.headers, response.body)
         else:

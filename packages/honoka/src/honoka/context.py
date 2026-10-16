@@ -1,11 +1,16 @@
 """The per-request Context and the typed keys it stores values under."""
 
+import mimetypes
+import os
 import re
 from collections.abc import AsyncIterable
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
+from urllib.parse import quote
 
+from honoka.errors import HTTPError
 from honoka.json import JsonCodec
-from honoka.response import Json, Response, Stream
+from honoka.response import FileResponse, Json, Response, Stream
 
 if TYPE_CHECKING:
     from honoka.request import Request
@@ -67,6 +72,36 @@ class Context:
 
     def html(self, body: str, status: int = 200) -> Response:
         return Response(body.encode(), status, [("content-type", "text/html; charset=utf-8")])
+
+    def file(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        root: str | os.PathLike[str] | None = None,
+        content_type: str | None = None,
+        filename: str | None = None,
+        status: int = 200,
+    ) -> FileResponse:
+        """Send a file. The server streams it from disk; nothing is read into Python.
+
+        When `path` comes from the request, pass `root`: the file must then sit below that
+        directory, so `../` and absolute paths answer 404 instead of leaking other files.
+        `filename` makes the browser download it under that name."""
+        target = Path(path)
+        if root is not None:
+            base = Path(root).resolve()
+            target = (base / target).resolve()
+            if not target.is_relative_to(base):
+                raise HTTPError(404, "file_not_found")
+        if not target.is_file():
+            raise HTTPError(404, "file_not_found")
+        kind = content_type or mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        headers = [("content-type", kind)]
+        if filename is not None:
+            headers.append(
+                ("content-disposition", f"attachment; filename*=UTF-8''{quote(filename, safe='')}")
+            )
+        return FileResponse(str(target), status, headers)
 
     def redirect(self, location: str, status: int = 302) -> Response:
         if "\r" in location or "\n" in location:

@@ -8,15 +8,16 @@ def test_routes_lists_every_route_with_its_handler(capsys: pytest.CaptureFixture
     assert main(["routes", "cli_apps.good:app"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines == [
-        "GET   /health           health",
-        "GET   /users/{user_id}  get_user",
-        "POST  /users            create_user",
+        "GET   /health                 health",
+        "GET   /users/{user_id}        get_user",
+        "POST  /users                  create_user",
+        "GET   /orders/{order_id:int}  get_order",
     ]
 
 
 def test_check_passes_a_correct_app(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["check", "cli_apps.good:app"]) == 0
-    assert capsys.readouterr().out.strip() == "ok: 3 routes checked"
+    assert capsys.readouterr().out.strip() == "ok: 4 routes checked"
 
 
 def test_check_reports_each_mistake_with_the_route_and_fails(
@@ -30,8 +31,9 @@ def test_check_reports_each_mistake_with_the_route_and_fails(
         in out
     )
     assert "✗ POST /users: c.req.valid(UserIn) is called, but the route validates CreateUser" in out
+    assert "✗ GET /typed/{n:int}: path parameter 'n' is never read by typed_unused" in out
     assert "! GET /legacy: no_return_annotation has no return annotation" in out
-    assert out[-1] == "3 errors, 1 warning"
+    assert out[-1] == "4 errors, 1 warning"
 
 
 def test_an_app_that_cannot_be_imported_is_a_usage_error(

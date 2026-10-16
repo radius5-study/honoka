@@ -1,16 +1,21 @@
 """Build an OpenAPI 3.1 document from an app's route table."""
 
 import inspect
-import re
 import typing
 from collections.abc import Mapping
 
 import msgspec
 
 from honoka import App, Json
-from honoka.router import RouteInfo
+from honoka.router import RouteInfo, normalize, path_params
 
 _SKIPPED_METHODS = frozenset({"HEAD", "OPTIONS"})
+# What a path converter looks like in the document.
+_CONVERTER_SCHEMAS: dict[str, dict[str, object]] = {
+    "int": {"type": "integer"},
+    "float": {"type": "number"},
+    "uuid": {"type": "string", "format": "uuid"},
+}
 _PARAM_LOCATIONS = {"query": "query", "header": "header", "cookie": "cookie", "param": "path"}
 _REF = "#/components/schemas/{name}"
 _VALIDATION_FAILED: dict[str, object] = {
@@ -34,6 +39,11 @@ _VALIDATION_FAILED: dict[str, object] = {
         "schema": {"type": "string"},
     },
 }
+
+
+def _path_parameter(name: str, converter: str) -> dict[str, object]:
+    schema = _CONVERTER_SCHEMAS.get(converter, {"type": "string"})
+    return {"name": name, "in": "path", "required": True, "schema": schema}
 
 
 def _validator_schemas(route: RouteInfo) -> dict[str, object]:
@@ -86,7 +96,9 @@ def build(app: App, *, title: str, version: str) -> dict[str, object]:
     routes = [
         r
         for r in app.route_table()
-        if r.meta.get("openapi") is not False and r.method not in _SKIPPED_METHODS
+        if r.meta.get("openapi") is not False
+        and r.method not in _SKIPPED_METHODS
+        and "*" not in r.path.split("/")  # OpenAPI cannot describe a wildcard
     ]
 
     # Pass 1: every type that needs a schema, so msgspec can name and share the components.
@@ -146,7 +158,7 @@ def build(app: App, *, title: str, version: str) -> dict[str, object]:
             operation["description"] = description
 
         parameters: list[dict[str, object]] = []
-        path_names = re.findall(r"\{(\w+)\}", route.path)
+        path_converters = dict(path_params(route.path))
         documented_path: set[str] = set()
         for target, location in _PARAM_LOCATIONS.items():
             if target in schemas:
@@ -156,8 +168,8 @@ def build(app: App, *, title: str, version: str) -> dict[str, object]:
                     documented_path = {str(p["name"]) for p in found}
         parameters = [
             *(
-                {"name": n, "in": "path", "required": True, "schema": {"type": "string"}}
-                for n in path_names
+                _path_parameter(n, path_converters[n])
+                for n in path_converters
                 if n not in documented_path
             ),
             *parameters,
@@ -196,7 +208,7 @@ def build(app: App, *, title: str, version: str) -> dict[str, object]:
                 "content": {"application/json": {"schema": schema_of[declared]}},
             }
         operation["responses"] = responses
-        paths.setdefault(route.path, {})[route.method.lower()] = operation
+        paths.setdefault(normalize(route.path), {})[route.method.lower()] = operation
 
     keep = {
         name: schema

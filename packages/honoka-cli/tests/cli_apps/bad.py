@@ -27,6 +27,11 @@ def wrong_validated_type(c: Context) -> Response:
     return c.text("")
 
 
+@app.get("/typed/{n:int}")
+def typed_unused(c: Context) -> Response:
+    return c.text("never reads n")
+
+
 @app.get("/legacy")
 def no_return_annotation(c: Context):  # type: ignore[no-untyped-def]
     return c.text("")

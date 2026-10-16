@@ -4,7 +4,6 @@ import argparse
 import ast
 import importlib
 import inspect
-import re
 import sys
 import textwrap
 import typing
@@ -13,7 +12,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from honoka.app import App
-from honoka.router import RouteInfo
+from honoka.router import RouteInfo, path_params
 
 _UNRESOLVED = object()
 
@@ -89,7 +88,7 @@ def analyze(route: RouteInfo) -> list[Finding]:
     except (OSError, TypeError, SyntaxError):
         return findings
 
-    path_names = re.findall(r"\{(\w+)\}", route.path)
+    path_names = [name for name, _ in path_params(route.path)]
     read: set[str] = set()
     dynamic = False
     typos: list[str] = []

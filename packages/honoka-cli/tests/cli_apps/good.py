@@ -22,3 +22,8 @@ def get_user(c: Context) -> Response:
 def create_user(c: Context) -> Response:
     c.req.valid(CreateUser)
     return c.text("created", 201)
+
+
+@app.get("/orders/{order_id:int}")
+def get_order(c: Context) -> Response:
+    return c.text(str(c.req.param("order_id", int)))

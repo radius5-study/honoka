@@ -167,3 +167,34 @@ def test_the_page_escapes_the_title() -> None:
     docs(app, title="<script>x</script>")
     with app.test() as client:
         assert "<script>x</script>" not in client.get("/docs").text
+
+
+def test_typed_path_parameters_and_wildcards_are_documented_sensibly() -> None:
+    app = App()
+    docs(app)
+
+    @app.get("/items/{item_id:int}")
+    def item(c: Context) -> Response:
+        return c.text("")
+
+    @app.get("/files/{ref:uuid}")
+    def by_ref(c: Context) -> Response:
+        return c.text("")
+
+    @app.get("/static/*")
+    def static(c: Context) -> Response:
+        return c.text("")
+
+    spec = spec_of(app)
+    assert keys(at(spec, "paths")) == ["/files/{ref}", "/items/{item_id}"]
+    assert at(spec, "paths", "/items/{item_id}", "get", "parameters") == [
+        {"name": "item_id", "in": "path", "required": True, "schema": {"type": "integer"}}
+    ]
+    assert at(spec, "paths", "/files/{ref}", "get", "parameters") == [
+        {
+            "name": "ref",
+            "in": "path",
+            "required": True,
+            "schema": {"type": "string", "format": "uuid"},
+        }
+    ]

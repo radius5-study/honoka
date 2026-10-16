@@ -81,3 +81,16 @@ def test_cookies_stream_and_errors_behave_like_the_fake_server(base_url: str) ->
 
     wrong = httpx.delete(f"{base_url}/health")
     assert (wrong.status_code, wrong.headers["allow"]) == (405, "GET, HEAD")
+
+
+def test_files_typed_parameters_and_wildcards_work_over_real_http(base_url: str) -> None:
+    file = httpx.get(f"{base_url}/file")
+    assert file.text == "hello file\n"
+    assert file.headers["content-type"].startswith("text/plain")
+    assert file.headers["content-disposition"] == "attachment; filename*=UTF-8''greeting.txt"
+
+    assert httpx.head(f"{base_url}/file").content == b""
+
+    assert httpx.get(f"{base_url}/typed/41").text == "42"
+    assert httpx.get(f"{base_url}/typed/abc").status_code == 404
+    assert httpx.get(f"{base_url}/wild/a/b").text == "/wild/a/b"
