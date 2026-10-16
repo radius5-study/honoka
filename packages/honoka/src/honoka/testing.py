@@ -5,7 +5,7 @@ import json as jsonlib
 from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Self, cast
+from typing import TYPE_CHECKING, Literal, Self, cast
 
 if TYPE_CHECKING:
     from honoka.app import App
@@ -144,7 +144,7 @@ async def asgi_call(
     assert all(k == k.lower() for k, _ in raw), "ASGI header names must be lowercase"
     return ClientResponse(
         cast(int, start["status"]),
-        [(k.decode("latin-1"), v.decode("latin-1")) for k, v in raw],
+        [(k.decode("latin-1"), v.decode()) for k, v in raw],
         b"".join(cast(bytes, c.get("body", b"")) for c in chunks),
     )
 
@@ -176,9 +176,7 @@ class _Lifespan:
 
 
 class Client:
-    def __init__(self, app: "App", interface: str = "rsgi") -> None:
-        if interface not in ("rsgi", "asgi"):
-            raise ValueError(f"interface must be 'rsgi' or 'asgi', not {interface!r}")
+    def __init__(self, app: "App", interface: Literal["rsgi", "asgi"] = "rsgi") -> None:
         self._app = app
         self._interface = interface
         self._runner: asyncio.Runner | None = None

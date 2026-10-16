@@ -5,10 +5,12 @@ The same requests must produce the same responses on both, byte for byte."""
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
 from honoka import App, Context, HTTPError, Json, Key, Next, Response
+from honoka.asgi import AsgiMessage
 
 REQUEST_ID: Key[str] = Key("rid")
 
@@ -76,6 +78,14 @@ def build(tmp_path: Path) -> tuple[App, list[str]]:
     def file(c: Context) -> Response:
         return c.file(tmp_path / "note.txt", filename="n.txt")
 
+    @app.get("/jump")
+    def jump(c: Context) -> Response:
+        return c.redirect("/日本語")
+
+    @app.get("/who")
+    def who(c: Context) -> Response:
+        return c.text(f"{c.req.cookie('a')}|{c.req.cookie('b')}|{c.req.header('x-multi')}")
+
     @app.get("/files/*")
     def wild(c: Context) -> Response:
         return c.text(c.req.path)
@@ -104,10 +114,11 @@ REQUESTS: list[Request] = [
     ("GET", "/file", {}, b""),
     ("GET", "/files/a/b.txt", {}, b""),
     ("GET", "/users/abc", {}, b""),
+    ("GET", "/jump", {}, b""),
 ]
 
 
-def outcome(app: App, interface: str, request: Request) -> object:
+def outcome(app: App, interface: Literal["rsgi", "asgi"], request: Request) -> object:
     method, path, headers, body = request
     with app.test(interface=interface) as client:
         resp = client.request(method, path, headers=headers, content=body)
@@ -134,6 +145,23 @@ def test_the_asgi_answers_are_the_real_thing_not_just_equal_to_each_other(tmp_pa
     assert text.headers["x-request-id"] == "r1"
     assert (crash.status, crash.json()) == (500, {"error": "internal_error"})
     assert stream.text == "onetwothree"
+
+
+def test_a_header_split_into_several_fields_is_read_as_one(tmp_path: Path) -> None:
+    """HTTP/2 clients may send `cookie` as separate fields; RSGI hands them over joined."""
+    app, _ = build(tmp_path)
+    fields = [(b"cookie", b"a=1"), (b"cookie", b"b=2"), (b"x-multi", b"p"), (b"x-multi", b"q")]
+    sent: list[AsgiMessage] = []
+
+    async def receive() -> AsgiMessage:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: AsgiMessage) -> None:
+        sent.append(message)
+
+    scope: AsgiMessage = {"type": "http", "method": "GET", "path": "/who", "headers": fields}
+    asyncio.run(app(scope, receive, send))
+    assert sent[-1]["body"] == b"1|2|p, q"
 
 
 def test_lifespan_runs_startup_and_shutdown_hooks_through_the_asgi_protocol(

@@ -33,7 +33,12 @@ class AsgiHeaders:
         if self._map is None:
             table: dict[str, str] = {}
             for name, value in self._raw:
-                table.setdefault(name.decode("latin-1").lower(), value.decode("latin-1"))
+                key = name.decode("latin-1").lower()
+                text = value.decode("latin-1")
+                # HTTP/2 may split `cookie` into several fields; RFC 9110 joins the rest with ", ".
+                if key in table:
+                    text = table[key] + ("; " if key == "cookie" else ", ") + text
+                table[key] = text
             self._map = table
         return self._map
 
@@ -59,7 +64,8 @@ class HttpScope:
 
 
 def _encode(headers: list[tuple[str, str]]) -> list[tuple[bytes, bytes]]:
-    return [(name.lower().encode("latin-1"), value.encode("latin-1")) for name, value in headers]
+    # UTF-8, as Granian's RSGI sends str headers: a redirect to "/日本語" must not crash the response.
+    return [(name.lower().encode("latin-1"), value.encode()) for name, value in headers]
 
 
 class _Transport:

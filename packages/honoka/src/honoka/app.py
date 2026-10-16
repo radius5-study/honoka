@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from honoka._rsgi import Proto, Scope
 from honoka.asgi import AsgiProto, AsgiScope, HttpScope, Receive, Send, run_lifespan
@@ -265,7 +265,7 @@ class App:
         """Compile routes now, so registration mistakes surface at startup, not on a request."""
         self._compile()
 
-    def test(self, interface: str = "rsgi") -> "Client":
+    def test(self, interface: Literal["rsgi", "asgi"] = "rsgi") -> "Client":
         """A synchronous test client. `interface=\"asgi\"` drives the app through its ASGI entry."""
         from honoka.testing import Client
 
