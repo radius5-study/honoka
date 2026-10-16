@@ -204,7 +204,7 @@ class Request:
         raw = self.cookie(name, prefix=prefix)
         if raw is None:
             return None
-        value = unsign(raw, secret)
+        value = unsign(name, raw, secret)
         return False if value is None else value
 
     def accepts(self, offers: Sequence[str]) -> str | None:
@@ -250,14 +250,18 @@ class Request:
         A repeated field keeps its last value, or all of them as a list with `all=True`. `dot=True`
         turns `a.b=1` into `{"a": {"b": 1}}`. Any other content type gives `{}`."""
         content_type = self.header("content-type") or ""
+        kind = content_type.split(";")[0].strip().lower()
         body = await self.body()
         fields: list[tuple[str, Leaf]]
-        if content_type.startswith("application/x-www-form-urlencoded"):
-            fields = list(parse_qsl(body.decode(), keep_blank_values=True))
-        elif content_type.startswith("multipart/form-data"):
-            fields = parse_multipart(content_type, body)
-        else:
-            return {}
+        try:
+            if kind == "application/x-www-form-urlencoded":
+                fields = list(parse_qsl(body.decode(), keep_blank_values=True))
+            elif kind == "multipart/form-data":
+                fields = parse_multipart(content_type, body)
+            else:
+                return {}
+        except (UnicodeDecodeError, LookupError) as exc:  # a bad charset or bytes in the form
+            raise HTTPError(400, "invalid_form", "the form body is not valid text") from exc
         parsed: dict[str, FormValue] = {}
         if all:
             grouped: dict[str, list[Leaf]] = {}

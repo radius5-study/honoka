@@ -240,7 +240,7 @@ class Context:
         """Like `cookie`, with an HMAC-SHA256 signature; read it with `c.req.signed_cookie`."""
         self.cookie(
             name,
-            sign(value, secret),
+            sign(name, value, secret),
             max_age=max_age,
             expires=expires,
             path=path,

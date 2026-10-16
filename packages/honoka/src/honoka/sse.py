@@ -1,5 +1,6 @@
 """Server-Sent Events framing."""
 
+import re
 from dataclasses import dataclass
 
 
@@ -22,5 +23,6 @@ def format_event(event: SSEEvent) -> bytes:
         lines.append(f"id: {event.id}")
     if event.retry is not None:
         lines.append(f"retry: {event.retry}")
-    lines.extend(f"data: {line}" for line in event.data.splitlines() or [""])
+    # Only CR, LF and CRLF end a line in SSE; `str.splitlines()` would also split on U+2028.
+    lines.extend(f"data: {line}" for line in re.split(r"\r\n|\r|\n", event.data))
     return ("\n".join(lines) + "\n\n").encode()

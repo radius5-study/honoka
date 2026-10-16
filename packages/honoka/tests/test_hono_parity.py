@@ -1,7 +1,9 @@
 """Hono's remaining app, request, cookie and streaming APIs, through the public test client."""
 
+import asyncio
 from collections.abc import AsyncIterator, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
+from typing import cast
 
 import pytest
 
@@ -16,7 +18,7 @@ from honoka import (
     WebSocket,
     generate_cookie,
 )
-from honoka.asgi import AsgiScope, Receive, Send
+from honoka.asgi import AsgiMessage, AsgiScope, Receive, Send
 
 
 def test_base_path_prefixes_routes_middleware_and_fallbacks() -> None:
@@ -350,3 +352,181 @@ def test_the_raw_asgi_scope_is_available_to_adapters() -> None:
 
     with app.test() as client:
         assert client.get("/scope").text == "('testserver', 80)"
+
+
+async def _deny(c: Context, call_next: Next) -> Response:
+    raise HTTPError(401, "unauthorized")
+
+
+def test_middleware_covering_a_path_runs_for_dynamic_and_wildcard_routes() -> None:
+    """The middleware's pattern is compared with the request path, not with the route's text."""
+    app = App()
+    app.use("/admin/*", _deny)
+
+    @app.get("/{section}/panel")
+    def panel(c: Context) -> Response:
+        return c.text("panel")
+
+    @app.get("/files/{p:path}")
+    def files(c: Context) -> Response:
+        return c.text("file")
+
+    @app.get("/*")
+    def catch_all(c: Context) -> Response:
+        return c.text("any")
+
+    with app.test() as client:
+        assert client.get("/admin/panel").status == 401
+        assert client.get("/public/panel").text == "panel"
+        assert client.get("/admin/x").status == 401
+        assert client.get("/other/x").text == "any"
+        assert client.get("/files/a/b").text == "file"
+
+
+def test_middleware_runs_before_a_websocket_is_accepted() -> None:
+    app = App()
+    app.use("/private/*", _deny)
+
+    @app.ws("/private/room")
+    async def private(ws: WebSocket) -> None:
+        await ws.accept()
+        await ws.send_text("secret")
+
+    @app.ws("/open/room")
+    async def public(ws: WebSocket) -> None:
+        await ws.accept()
+        await ws.send_text("hello")
+
+    with app.test() as client:
+        with client.websocket("/private/room") as ws:
+            assert not ws.accepted
+            assert ws.close_code == 1008
+        with client.websocket("/open/room") as ws:
+            assert ws.receive_text() == "hello"
+
+
+def test_middleware_runs_before_a_mounted_app_and_the_prefix_must_not_be_empty() -> None:
+    async def inner(scope: AsgiScope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"inner"})
+
+    app = App()
+    app.use("/legacy/*", _deny)
+    app.mount("/legacy", inner)
+    app.mount("/open", inner)
+
+    with app.test() as client:
+        assert client.get("/legacy/x").status == 401
+        assert client.get("/open/x").text == "inner"
+    with pytest.raises(ValueError, match="prefix"):
+        app.mount("/", inner)
+
+
+def test_c_header_is_visible_to_the_middleware_around_the_handler() -> None:
+    app = App()
+    seen: list[str | None] = []
+
+    async def observe(c: Context, call_next: Next) -> Response:
+        response = await call_next()
+        seen.append(dict(response.headers).get("x-set-by-handler"))
+        return response
+
+    app.use("*", observe)
+
+    @app.get("/")
+    def home(c: Context) -> Response:
+        c.header("x-set-by-handler", "yes")
+        return c.text("hi")
+
+    with app.test() as client:
+        assert client.get("/").headers["x-set-by-handler"] == "yes"
+    assert seen == ["yes"]
+
+
+def test_the_request_url_keeps_the_path_as_it_was_sent() -> None:
+    app = App()
+
+    @app.get("/{p:path}")
+    def show(c: Context) -> Response:
+        return c.text(c.req.url)
+
+    async def go() -> str:
+        scope: AsgiMessage = {
+            "type": "http",
+            "method": "GET",
+            "path": "/a?b#c",
+            "raw_path": b"/a%3Fb%23c",
+            "query_string": b"x=1",
+            "scheme": "https",
+            "headers": [(b"host", b"example.test")],
+        }
+        sent: list[AsgiMessage] = []
+
+        async def receive() -> AsgiMessage:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: AsgiMessage) -> None:
+            sent.append(message)
+
+        await app(scope, receive, send)
+        return cast(bytes, sent[-1]["body"]).decode()
+
+    assert asyncio.run(go()) == "https://example.test/a%3Fb%23c?x=1"
+
+
+def test_a_signed_cookie_only_verifies_under_the_name_it_was_made_for() -> None:
+    app = App()
+
+    @app.get("/set")
+    def set_it(c: Context) -> Response:
+        c.signed_cookie("a", "v", "s3cret")
+        return c.text("")
+
+    @app.get("/get/{name}")
+    def get_it(c: Context) -> Response:
+        return c.text(repr(c.req.signed_cookie(c.req.param("name"), "s3cret")))
+
+    with app.test() as client:
+        header = next(v for k, v in client.get("/set").raw_headers if k == "set-cookie")
+        value = header.split(";")[0].split("=", 1)[1]
+        assert client.get("/get/a", headers={"cookie": f"a={value}"}).text == "'v'"
+        assert client.get("/get/b", headers={"cookie": f"b={value}"}).text == "False"
+
+
+def test_a_naive_or_non_utc_expiry_is_accepted() -> None:
+    naive = datetime.now() + timedelta(days=1)
+    jst = datetime.now(timezone(timedelta(hours=9))) + timedelta(days=1)
+    for when in (naive, jst):
+        assert "Expires=" in generate_cookie("n", "v", expires=when)
+
+
+def test_form_bodies_with_bad_text_are_a_400_and_the_content_type_is_case_insensitive() -> None:
+    app = App()
+
+    @app.post("/form")
+    async def form(c: Context) -> Response:
+        return c.json(await c.req.parse_body())
+
+    with app.test() as client:
+        bad = client.post(
+            "/form",
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            content=b"a=\xff",
+        )
+        shouting = client.post(
+            "/form",
+            headers={"content-type": "Application/X-WWW-Form-Urlencoded"},
+            content=b"a=1",
+        )
+    assert (bad.status, bad.json()) == (
+        400,
+        {"error": "invalid_form", "detail": "the form body is not valid text"},
+    )
+    assert shouting.json() == {"a": "1"}
+
+
+def test_sse_data_keeps_trailing_newlines_and_does_not_split_on_unicode_separators() -> None:
+    from honoka.sse import format_event
+
+    assert format_event(SSEEvent("a\n")) == b"data: a\ndata: \n\n"
+    assert format_event(SSEEvent("x y")) == "data: x y\n\n".encode()

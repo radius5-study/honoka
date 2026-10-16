@@ -112,3 +112,19 @@ def test_retain_headers_replaces_the_kept_list() -> None:
     assert resp.status == 304
     assert resp.headers["x-extra"] == "1"
     assert "cache-control" not in resp.headers
+
+
+def test_an_etag_set_with_c_header_is_the_one_a_conditional_request_is_compared_with() -> None:
+    app = App()
+    app.use("*", etag())
+
+    @app.get("/")
+    def index(c: Context) -> Response:
+        c.header("etag", '"v1"')
+        return c.text("hello")
+
+    with app.test() as client:
+        full = client.get("/")
+        cached = client.get("/", headers={"if-none-match": '"v1"'})
+    assert (full.status, full.headers["etag"]) == (200, '"v1"')
+    assert cached.status == 304

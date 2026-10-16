@@ -60,7 +60,7 @@ def compress(
     Buffered bodies of at least `threshold` bytes with a compressible content type are
     compressed; `Content-Length` is dropped, `Vary: Accept-Encoding` added and a strong ETag
     made weak. Skipped for HEAD, streams, files, an existing `Content-Encoding` and
-    `Cache-Control: no-transform`. Brotli and zstd are not implemented (no dependency)."""
+    `Cache-Control: no-transform`, and 206 partial responses. Brotli and zstd are not implemented (no dependency)."""
     allowed: tuple[Encoding, ...] = ("gzip", "deflate") if encoding is None else (encoding,)
 
     def compressible(content_type: str) -> bool:
@@ -75,6 +75,7 @@ def compress(
             header is None
             or c.req.method == "HEAD"
             or isinstance(response, Stream | FileResponse)
+            or response.status == 206  # a partial response: its Content-Range describes the bytes
             or len(response.body) < max(threshold, 1)
         ):
             return response

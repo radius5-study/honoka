@@ -4,7 +4,7 @@ import base64
 import hashlib
 import hmac
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from typing import Literal
 
@@ -55,8 +55,10 @@ def generate_cookie(
         name = cookie_name(name, prefix)
     if max_age is not None and max_age > _MAX_AGE_LIMIT:
         raise ValueError("max_age must be at most 400 days")
-    if expires is not None and expires - datetime.now(expires.tzinfo) > timedelta(days=400):
-        raise ValueError("expires must be at most 400 days ahead")
+    if expires is not None:
+        expires = expires.replace(tzinfo=UTC) if expires.tzinfo is None else expires.astimezone(UTC)
+        if expires - datetime.now(UTC) > timedelta(days=400):
+            raise ValueError("expires must be at most 400 days ahead")
     if partitioned:
         secure = True
     parts = [f"{name}={value}", f"Path={path}"]
@@ -84,14 +86,16 @@ def _signature(value: str, secret: str) -> str:
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
-def sign(value: str, secret: str) -> str:
-    """`value.signature`, with an HMAC-SHA256 signature."""
-    return f"{value}.{_signature(value, secret)}"
+def sign(name: str, value: str, secret: str) -> str:
+    """`value.signature`. The signature covers the cookie's name too, so a value signed for one
+    cookie is not accepted as another."""
+    return f"{value}.{_signature(f'{name}={value}', secret)}"
 
 
-def unsign(signed: str, secret: str) -> str | None:
-    """The value of a string made by `sign`, or `None` if the signature does not match."""
+def unsign(name: str, signed: str, secret: str) -> str | None:
+    """The value of a string made by `sign` for this cookie, or `None` if it does not verify."""
     value, dot, signature = signed.rpartition(".")
-    if not dot or not hmac.compare_digest(signature.encode(), _signature(value, secret).encode()):
+    expected = _signature(f"{name}={value}", secret)
+    if not dot or not hmac.compare_digest(signature.encode(), expected.encode()):
         return None
     return value

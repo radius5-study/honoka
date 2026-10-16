@@ -119,3 +119,37 @@ def test_a_custom_content_type_filter() -> None:
     assert "content-encoding" not in get(app, "/big", "gzip")[1]
     by_function = make_app(compress(content_type_filter=lambda t: t.startswith("text/")))
     assert get(by_function, "/big", "gzip")[1]["content-encoding"] == "gzip"
+
+
+def test_a_content_encoding_set_with_c_header_is_respected() -> None:
+    app = App()
+    app.use("*", compress())
+    payload = gzip.compress(b"x" * 3000)
+
+    @app.get("/already")
+    def already(c: Context) -> Response:
+        c.header("content-encoding", "gzip")
+        return c.body(payload, headers={"content-type": "text/plain"})
+
+    with app.test() as client:
+        resp = client.get("/already", headers={"accept-encoding": "gzip"})
+    assert resp.headers["content-encoding"] == "gzip"
+    assert gzip.decompress(resp.body) == b"x" * 3000  # compressed once, not twice
+
+
+def test_a_partial_response_is_left_alone() -> None:
+    app = App()
+    app.use("*", compress())
+
+    @app.get("/range")
+    def part(c: Context) -> Response:
+        return c.body(
+            b"x" * 2000,
+            206,
+            {"content-type": "text/plain", "content-range": "bytes 0-1999/9000"},
+        )
+
+    with app.test() as client:
+        resp = client.get("/range", headers={"accept-encoding": "gzip"})
+    assert (resp.status, resp.body) == (206, b"x" * 2000)
+    assert "content-encoding" not in resp.headers
