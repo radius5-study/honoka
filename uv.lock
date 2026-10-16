@@ -9,6 +9,7 @@ members = [
     "honoka-cli",
     "honoka-cors",
     "honoka-csrf",
+    "honoka-llms",
     "honoka-logger",
     "honoka-msgspec",
     "honoka-openapi",
@@ -187,6 +188,29 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "honoka", editable = "packages/honoka" }]
+
+[[package]]
+name = "honoka-llms"
+version = "0.1.0"
+source = { editable = "packages/honoka-llms" }
+dependencies = [
+    { name = "honoka" },
+    { name = "honoka-openapi" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "honoka-msgspec" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "honoka", editable = "packages/honoka" },
+    { name = "honoka-openapi", editable = "packages/honoka-openapi" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "honoka-msgspec", editable = "packages/honoka-msgspec" }]
 
 [[package]]
 name = "honoka-logger"

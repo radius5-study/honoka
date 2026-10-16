@@ -252,7 +252,7 @@ A format that lets an agent autonomously follow "what is wrong, how to fix it, a
 
 ### 9.3 Other
 
-- **llms.txt**: Provide the documentation itself in llms.txt format so that it can be pasted into an agent's context
+- **llms.txt**: Provide the documentation itself in llms.txt format so that it can be pasted into an agent's context. For apps built with honoka, the separate package `honoka-llms` serves `/llms.txt` (index) and `/llms-full.txt` (parameters, bodies, responses) generated from the route table; Scalar's API Reference has no such feature
 - **Official middleware** (Idempotency-Key, rate limiting, API-key authentication, CSRF, CORS, ...): one separate package each (`honoka-cors`, `honoka-csrf`, ...), none part of the core (see 9.4)
 - **SSE**: Easily stream progress with `c.stream(async_generator)`
 - **MCP exposure (separate package, future)**: Setting `tool=True` on a route also exposes it as an MCP tool, preventing duplicate HTTP and MCP implementations
