@@ -48,22 +48,29 @@ def make_app() -> App:
     app = App()
     docs(app, title="Demo", version="1.2.3")
 
-    @app.post(
-        "/users", validator(json=CreateUser, query=Search), status=201, responses={404: ErrorBody}
-    )
     async def create_user(c: Context) -> Json[UserOut]:
         """Create a user.
 
         The user is stored and returned."""
         return c.json(UserOut(id=1, name="a"), 201)
 
-    @app.get("/users/{user_id}")
+    app.post(
+        "/users",
+        validator(json=CreateUser, query=Search),
+        create_user,
+        status=201,
+        responses={404: ErrorBody},
+    )
+
     def get_user(c: Context) -> Json[UserOut]:
         return c.json(UserOut(id=1, name="a"))
 
-    @app.get("/health")
+    app.get("/users/{user_id}", get_user)
+
     def health(c: Context) -> Response:
         return c.text("ok")
+
+    app.get("/health", health)
 
     return app
 
@@ -143,9 +150,10 @@ def test_routes_registered_after_docs_still_appear() -> None:
     app = App()
     docs(app)
 
-    @app.get("/late")
     def late(c: Context) -> Response:
         return c.text("")
+
+    app.get("/late", late)
 
     assert "/late" in keys(at(spec_of(app), "paths"))
 
@@ -173,17 +181,20 @@ def test_typed_path_parameters_and_wildcards_are_documented_sensibly() -> None:
     app = App()
     docs(app)
 
-    @app.get("/items/{item_id:int}")
     def item(c: Context) -> Response:
         return c.text("")
 
-    @app.get("/files/{ref:uuid}")
+    app.get("/items/{item_id:int}", item)
+
     def by_ref(c: Context) -> Response:
         return c.text("")
 
-    @app.get("/static/*")
+    app.get("/files/{ref:uuid}", by_ref)
+
     def static(c: Context) -> Response:
         return c.text("")
+
+    app.get("/static/*", static)
 
     spec = spec_of(app)
     assert keys(at(spec, "paths")) == ["/files/{ref}", "/items/{item_id}"]

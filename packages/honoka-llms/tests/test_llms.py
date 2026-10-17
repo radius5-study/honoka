@@ -28,16 +28,18 @@ def make_app(**options: str) -> App:
     app = App()
     llms(app, title="Demo API", **options)
 
-    @app.post("/users", validator(json=CreateUser, query=Search), status=201)
     async def create_user(c: Context) -> Json[UserOut]:
         """Create a user.
 
         The user is stored and returned."""
         return c.json(UserOut(id=1, name="a"), 201)
 
-    @app.get("/health")
+    app.post("/users", validator(json=CreateUser, query=Search), create_user, status=201)
+
     def health(c: Context) -> Response:
         return c.text("ok")
+
+    app.get("/health", health)
 
     return app
 
@@ -87,8 +89,9 @@ def test_routes_registered_after_llms_still_appear() -> None:
     app = App()
     llms(app, title="Late")
 
-    @app.get("/late")
     def late(c: Context) -> Response:
         return c.text("")
+
+    app.get("/late", late)
 
     assert "GET /late" in fetch(app, "/llms.txt")[1]

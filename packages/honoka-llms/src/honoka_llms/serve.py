@@ -24,7 +24,6 @@ def llms(
     def respond(c: Context, text: str) -> Response:
         return Response(text.encode(), 200, [("content-type", _MARKDOWN)])
 
-    @app.get(path, openapi=False)
     async def index(c: Context) -> Response:
         document = build(app, title=title, version=version)
         return respond(
@@ -38,7 +37,10 @@ def llms(
             ),
         )
 
-    @app.get(full_path, openapi=False)
+    app.get(path, index, openapi=False)
+
     async def full(c: Context) -> Response:
         document = build(app, title=title, version=version)
         return respond(c, render_full(document, title=title, description=description))
+
+    app.get(full_path, full, openapi=False)

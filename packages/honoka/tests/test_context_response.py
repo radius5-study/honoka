@@ -6,7 +6,6 @@ from honoka import App, Context, Next, Response
 def test_c_header_sets_replaces_appends_and_removes_on_the_final_response() -> None:
     app = App()
 
-    @app.get("/h")
     def handler(c: Context) -> Response:
         c.header("x-one", "1")
         c.header("x-one", "2")
@@ -14,6 +13,8 @@ def test_c_header_sets_replaces_appends_and_removes_on_the_final_response() -> N
         c.header("x-many", "b", append=True)
         c.header("x-gone", None)
         return c.json({}, headers={"x-gone": "was here"})
+
+    app.get("/h", handler)
 
     with app.test() as client:
         resp = client.get("/h")
@@ -34,9 +35,10 @@ def test_c_header_in_a_middleware_after_next_still_reaches_the_response() -> Non
 
     app.use("*", stamp)
 
-    @app.get("/")
     def home(c: Context) -> Response:
         return c.text("hi")
+
+    app.get("/", home)
 
     with app.test() as client:
         assert client.get("/").headers["x-after"] == "yes"
@@ -45,15 +47,17 @@ def test_c_header_in_a_middleware_after_next_still_reaches_the_response() -> Non
 def test_c_status_is_the_default_and_an_explicit_status_wins() -> None:
     app = App()
 
-    @app.get("/default")
     def default(c: Context) -> Response:
         c.status(201)
         return c.text("made")
 
-    @app.get("/explicit")
+    app.get("/default", default)
+
     def explicit(c: Context) -> Response:
         c.status(201)
         return c.json({}, 202)
+
+    app.get("/explicit", explicit)
 
     with app.test() as client:
         assert client.get("/default").status == 201
@@ -63,13 +67,15 @@ def test_c_status_is_the_default_and_an_explicit_status_wins() -> None:
 def test_c_body_sends_raw_bytes_and_text_html_take_headers() -> None:
     app = App()
 
-    @app.get("/raw")
     def raw(c: Context) -> Response:
         return c.body(b"\x00\x01", 206, {"content-type": "application/x-thing"})
 
-    @app.get("/page")
+    app.get("/raw", raw)
+
     def page(c: Context) -> Response:
         return c.html("<p>x</p>", headers={"cache-control": "no-store"})
+
+    app.get("/page", page)
 
     with app.test() as client:
         raw_resp = client.get("/raw")
@@ -86,9 +92,10 @@ def test_c_body_sends_raw_bytes_and_text_html_take_headers() -> None:
 def test_query_without_a_name_returns_every_parameter() -> None:
     app = App()
 
-    @app.get("/q")
     def q(c: Context) -> Response:
         return c.json({"first": c.req.query(), "all": c.req.queries()})
+
+    app.get("/q", q)
 
     with app.test() as client:
         got = client.get("/q?a=1&a=2&b=3").json()

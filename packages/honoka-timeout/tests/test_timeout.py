@@ -11,14 +11,16 @@ def test_a_slow_handler_is_cut_off_with_a_504() -> None:
     app = App()
     app.use("*", timeout(0.05))
 
-    @app.get("/slow")
     async def slow(c: Context) -> Response:
         await asyncio.sleep(0.5)
         return c.text("late")
 
-    @app.get("/fast")
+    app.get("/slow", slow)
+
     async def fast(c: Context) -> Response:
         return c.text("ok")
+
+    app.get("/fast", fast)
 
     with app.test() as client:
         slow_resp = client.get("/slow")

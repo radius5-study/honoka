@@ -25,28 +25,35 @@ async def stamp(c: Context, call_next: Next) -> Response:
 app.use("*", stamp)
 
 
-@app.get("/health")
 def health(c: Context) -> Response:
     return c.text("ok")
 
 
-@app.get("/users/{user_id}")
+app.get("/health", health)
+
+
 async def get_user(c: Context) -> Json[dict[str, object]]:
     return c.json({"id": c.req.param("user_id", int), "name": c.get(DB)})
 
 
-@app.post("/echo")
+app.get("/users/{user_id}", get_user)
+
+
 async def echo(c: Context) -> Response:
     return c.json({"query": c.req.query("q"), "body": await c.req.json()})
 
 
-@app.get("/cookie")
+app.post("/echo", echo)
+
+
 def cookie(c: Context) -> Response:
     c.cookie("sid", "abc", max_age=60)
     return c.text(c.req.cookie("in") or "none")
 
 
-@app.get("/stream")
+app.get("/cookie", cookie)
+
+
 async def stream(c: Context) -> Response:
     async def chunks() -> AsyncIterator[str]:
         for part in ("a", "b", "c"):
@@ -55,21 +62,32 @@ async def stream(c: Context) -> Response:
     return c.stream(chunks(), content_type="text/plain")
 
 
-@app.get("/boom")
+app.get("/stream", stream)
+
+
 def boom(c: Context) -> Response:
     raise RuntimeError("secret")
 
 
-@app.get("/file")
+app.get("/boom", boom)
+
+
 def file(c: Context) -> Response:
     return c.file(Path(__file__).parent / "data" / "hello.txt", filename="greeting.txt")
 
 
-@app.get("/typed/{n:int}")
+app.get("/file", file)
+
+
 def typed(c: Context) -> Response:
     return c.text(str(c.req.param("n", int) + 1))
 
 
-@app.get("/wild/*")
+app.get("/typed/{n:int}", typed)
+
+
 def wild(c: Context) -> Response:
     return c.text(c.req.path)
+
+
+app.get("/wild/*", wild)

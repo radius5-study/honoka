@@ -32,17 +32,19 @@ def test_base_path_prefixes_routes_middleware_and_fallbacks() -> None:
 
     api.use("*", stamp)
 
-    @api.get("/book")
     def book(c: Context) -> Response:
         return c.text(c.req.path)
+
+    api.get("/book", book)
 
     @api.not_found
     def missing(c: Context) -> Response:
         return c.text("api missing", 404)
 
-    @app.get("/other")
     def other(c: Context) -> Response:
         return c.text("other")
+
+    app.get("/other", other)
 
     with app.test() as client:
         got = client.get("/api/book")
@@ -55,17 +57,20 @@ def test_base_path_prefixes_routes_middleware_and_fallbacks() -> None:
 def test_the_query_method_and_custom_methods_and_several_paths() -> None:
     app = App()
 
-    @app.query("/search")
     def search(c: Context) -> Response:
         return c.text("queried")
 
-    @app.on("PURGE", "/cache")
+    app.query("/search", search)
+
     def purge(c: Context) -> Response:
         return c.text("purged")
 
-    @app.on("GET", ["/hello", "/ja/hello"])
+    app.on("PURGE", "/cache", purge)
+
     def hello(c: Context) -> Response:
         return c.text("hi")
+
+    app.on("GET", ["/hello", "/ja/hello"], hello)
 
     with app.test() as client:
         assert client.request("QUERY", "/search").text == "queried"
@@ -76,9 +81,10 @@ def test_the_query_method_and_custom_methods_and_several_paths() -> None:
 def test_get_path_decides_what_is_routed() -> None:
     app = App(get_path=lambda scope: "/" + scope["path"].lstrip("/").upper())
 
-    @app.get("/HELLO")
     def hello(c: Context) -> Response:
         return c.text(c.req.path)
+
+    app.get("/HELLO", hello)
 
     with app.test() as client:
         assert client.get("/hello").text == "/HELLO"
@@ -93,9 +99,10 @@ def test_a_mounted_asgi_app_sees_the_path_below_the_prefix() -> None:
     app = App()
     app.mount("/legacy", inner)
 
-    @app.get("/new")
     def new(c: Context) -> Response:
         return c.text("new")
+
+    app.get("/new", new)
 
     with app.test() as client:
         assert client.get("/legacy/a/b").text == "/a/b|/legacy"
@@ -107,12 +114,13 @@ def test_a_mounted_asgi_app_sees_the_path_below_the_prefix() -> None:
 def test_a_websocket_handler_talks_to_a_client() -> None:
     app = App()
 
-    @app.ws("/echo/{room}")
     async def echo(ws: WebSocket) -> None:
         await ws.accept()
         await ws.send_text(f"joined {ws.params['room']}")
         async for message in ws:
             await ws.send_json({"echo": message})
+
+    app.ws("/echo/{room}", echo)
 
     with app.test() as client, client.websocket("/echo/lobby") as ws:
         assert ws.accepted
@@ -130,7 +138,6 @@ def test_a_websocket_to_an_unknown_path_is_refused() -> None:
 def test_request_header_url_text_and_all_cookies() -> None:
     app = App()
 
-    @app.post("/info")
     async def info(c: Context) -> Response:
         return c.json(
             {
@@ -140,6 +147,8 @@ def test_request_header_url_text_and_all_cookies() -> None:
                 "cookies": c.req.cookie(),
             }
         )
+
+    app.post("/info", info)
 
     with app.test() as client:
         got = client.post(
@@ -154,7 +163,6 @@ def test_request_header_url_text_and_all_cookies() -> None:
 def test_parse_body_reads_urlencoded_and_multipart_forms() -> None:
     app = App()
 
-    @app.post("/form")
     async def form(c: Context) -> Response:
         body = await c.req.parse_body(all=True)
         shown = {
@@ -166,6 +174,8 @@ def test_parse_body_reads_urlencoded_and_multipart_forms() -> None:
             for k, v in body.items()
         }
         return c.json(shown)
+
+    app.post("/form", form)
 
     boundary = "XBOUNDARY"
     multipart = (
@@ -195,9 +205,10 @@ def test_parse_body_reads_urlencoded_and_multipart_forms() -> None:
 def test_parse_body_dot_nests_keys() -> None:
     app = App()
 
-    @app.post("/form")
     async def form(c: Context) -> Response:
         return c.json(await c.req.parse_body(dot=True))
+
+    app.post("/form", form)
 
     with app.test() as client:
         assert client.post("/form", form={"user.name": "a", "user.id": "7"}).json() == {
@@ -209,19 +220,22 @@ def test_cookie_options_prefixes_and_deletion_return_value() -> None:
     app = App()
     when = datetime.now(UTC) + timedelta(days=1)
 
-    @app.get("/set")
     def set_cookies(c: Context) -> Response:
         c.cookie("p", "1", prefix="secure", priority="High", partitioned=True, expires=when)
         c.cookie("h", "2", prefix="host")
         return c.text("")
 
-    @app.get("/del")
+    app.get("/set", set_cookies)
+
     def delete(c: Context) -> Response:
         return c.text(str(c.delete_cookie("sid")))
 
-    @app.get("/read")
+    app.get("/del", delete)
+
     def read(c: Context) -> Response:
         return c.text(f"{c.req.cookie('p', prefix='secure')}|{c.req.cookie('p')}")
+
+    app.get("/read", read)
 
     with app.test() as client:
         raw = [v for k, v in client.get("/set").raw_headers if k == "set-cookie"]
@@ -250,14 +264,16 @@ def test_cookie_rules_hono_enforces_are_enforced(make: Callable[[], str]) -> Non
 def test_signed_cookies_verify_and_detect_tampering() -> None:
     app = App()
 
-    @app.get("/set")
     def set_it(c: Context) -> Response:
         c.signed_cookie("sid", "abc", "s3cret")
         return c.text("")
 
-    @app.get("/get")
+    app.get("/set", set_it)
+
     def get_it(c: Context) -> Response:
         return c.text(repr(c.req.signed_cookie("sid", "s3cret")))
+
+    app.get("/get", get_it)
 
     with app.test() as client:
         header = next(v for k, v in client.get("/set").raw_headers if k == "set-cookie")
@@ -272,13 +288,14 @@ def test_signed_cookies_verify_and_detect_tampering() -> None:
 def test_server_sent_events_are_framed() -> None:
     app = App()
 
-    @app.get("/events")
     def events(c: Context) -> Response:
         async def source() -> AsyncIterator[str | SSEEvent]:
             yield "plain"
             yield SSEEvent("two\nlines", event="tick", id="7", retry=1000)
 
         return c.sse(source())
+
+    app.get("/events", events)
 
     with app.test() as client:
         resp = client.get("/events")
@@ -291,12 +308,13 @@ def test_server_sent_events_are_framed() -> None:
 def test_an_sse_event_name_cannot_inject_fields() -> None:
     app = App()
 
-    @app.get("/events")
     def events(c: Context) -> Response:
         async def source() -> AsyncIterator[SSEEvent]:
             yield SSEEvent("x", event="a\ndata: forged")
 
         return c.sse(source())
+
+    app.get("/events", events)
 
     with app.test() as client, pytest.raises(ValueError, match="line breaks"):
         client.get("/events")
@@ -305,13 +323,14 @@ def test_an_sse_event_name_cannot_inject_fields() -> None:
 def test_stream_text_sends_chunks() -> None:
     app = App()
 
-    @app.get("/t")
     def stream(c: Context) -> Response:
         async def chunks() -> AsyncIterator[str]:
             for part in ("a", "b"):
                 yield part
 
         return c.stream_text(chunks())
+
+    app.get("/t", stream)
 
     with app.test() as client:
         assert client.get("/t").text == "ab"
@@ -320,7 +339,6 @@ def test_stream_text_sends_chunks() -> None:
 def test_http_error_can_carry_its_own_response() -> None:
     app = App()
 
-    @app.get("/auth")
     def auth(c: Context) -> Response:
         raise HTTPError(
             401,
@@ -328,9 +346,12 @@ def test_http_error_can_carry_its_own_response() -> None:
             response=Response(b"nope", 200, [("www-authenticate", 'Bearer realm="x"')]),
         )
 
-    @app.get("/plain")
+    app.get("/auth", auth)
+
     def plain(c: Context) -> Response:
         raise HTTPError(409, "conflict")
+
+    app.get("/plain", plain)
 
     with app.test() as client:
         carried = client.get("/auth")
@@ -346,9 +367,10 @@ def test_http_error_can_carry_its_own_response() -> None:
 def test_the_raw_asgi_scope_is_available_to_adapters() -> None:
     app = App()
 
-    @app.get("/scope")
     def scope(c: Context) -> Response:
         return c.text(str(c.req.scope["server"]))
+
+    app.get("/scope", scope)
 
     with app.test() as client:
         assert client.get("/scope").text == "('testserver', 80)"
@@ -363,17 +385,20 @@ def test_middleware_covering_a_path_runs_for_dynamic_and_wildcard_routes() -> No
     app = App()
     app.use("/admin/*", _deny)
 
-    @app.get("/{section}/panel")
     def panel(c: Context) -> Response:
         return c.text("panel")
 
-    @app.get("/files/{p:path}")
+    app.get("/{section}/panel", panel)
+
     def files(c: Context) -> Response:
         return c.text("file")
 
-    @app.get("/*")
+    app.get("/files/{p:path}", files)
+
     def catch_all(c: Context) -> Response:
         return c.text("any")
+
+    app.get("/*", catch_all)
 
     with app.test() as client:
         assert client.get("/admin/panel").status == 401
@@ -387,15 +412,17 @@ def test_middleware_runs_before_a_websocket_is_accepted() -> None:
     app = App()
     app.use("/private/*", _deny)
 
-    @app.ws("/private/room")
     async def private(ws: WebSocket) -> None:
         await ws.accept()
         await ws.send_text("secret")
 
-    @app.ws("/open/room")
+    app.ws("/private/room", private)
+
     async def public(ws: WebSocket) -> None:
         await ws.accept()
         await ws.send_text("hello")
+
+    app.ws("/open/room", public)
 
     with app.test() as client:
         with client.websocket("/private/room") as ws:
@@ -433,10 +460,11 @@ def test_c_header_is_visible_to_the_middleware_around_the_handler() -> None:
 
     app.use("*", observe)
 
-    @app.get("/")
     def home(c: Context) -> Response:
         c.header("x-set-by-handler", "yes")
         return c.text("hi")
+
+    app.get("/", home)
 
     with app.test() as client:
         assert client.get("/").headers["x-set-by-handler"] == "yes"
@@ -446,9 +474,10 @@ def test_c_header_is_visible_to_the_middleware_around_the_handler() -> None:
 def test_the_request_url_keeps_the_path_as_it_was_sent() -> None:
     app = App()
 
-    @app.get("/{p:path}")
     def show(c: Context) -> Response:
         return c.text(c.req.url)
+
+    app.get("/{p:path}", show)
 
     async def go() -> str:
         scope: AsgiMessage = {
@@ -477,14 +506,16 @@ def test_the_request_url_keeps_the_path_as_it_was_sent() -> None:
 def test_a_signed_cookie_only_verifies_under_the_name_it_was_made_for() -> None:
     app = App()
 
-    @app.get("/set")
     def set_it(c: Context) -> Response:
         c.signed_cookie("a", "v", "s3cret")
         return c.text("")
 
-    @app.get("/get/{name}")
+    app.get("/set", set_it)
+
     def get_it(c: Context) -> Response:
         return c.text(repr(c.req.signed_cookie(c.req.param("name"), "s3cret")))
+
+    app.get("/get/{name}", get_it)
 
     with app.test() as client:
         header = next(v for k, v in client.get("/set").raw_headers if k == "set-cookie")
@@ -503,9 +534,10 @@ def test_a_naive_or_non_utc_expiry_is_accepted() -> None:
 def test_form_bodies_with_bad_text_are_a_400_and_the_content_type_is_case_insensitive() -> None:
     app = App()
 
-    @app.post("/form")
     async def form(c: Context) -> Response:
         return c.json(await c.req.parse_body())
+
+    app.post("/form", form)
 
     with app.test() as client:
         bad = client.post(

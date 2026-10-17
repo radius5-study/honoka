@@ -12,9 +12,10 @@ def make(middleware: Middleware) -> App:
     app = App()
     app.use("*", middleware)
 
-    @app.get("/")
     def index(c: Context) -> Response:
         return c.text("ok")
+
+    app.get("/", index)
 
     return app
 

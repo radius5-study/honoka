@@ -30,10 +30,11 @@ def test_middleware_wraps_the_handler_in_registration_order() -> None:
     app.use("*", tracer("a", log))
     app.use("*", tracer("b", log))
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         log.append("handler")
         return c.text("")
+
+    app.get("/", handler)
 
     with app.test() as client:
         client.get("/")
@@ -45,9 +46,10 @@ def test_a_value_set_by_middleware_is_readable_by_the_handler() -> None:
     app = App()
     app.use("/api/*", auth)
 
-    @app.get("/api/me")
     def me(c: Context) -> Response:
         return c.text(c.get(USER))
+
+    app.get("/api/me", me)
 
     with app.test() as client:
         assert client.get("/api/me", headers={"authorization": "t"}).text == "alice"
@@ -58,10 +60,11 @@ def test_middleware_can_answer_without_calling_the_handler() -> None:
     app.use("/api/*", auth)
     called: list[str] = []
 
-    @app.get("/api/me")
     def me(c: Context) -> Response:
         called.append("handler")
         return c.text("me")
+
+    app.get("/api/me", me)
 
     with app.test() as client:
         resp = client.get("/api/me")
@@ -74,13 +77,15 @@ def test_a_path_pattern_limits_which_routes_a_middleware_wraps() -> None:
     app = App()
     app.use("/api/*", auth)
 
-    @app.get("/api/me")
     def private(c: Context) -> Response:
         return c.text("private")
 
-    @app.get("/public")
+    app.get("/api/me", private)
+
     def public(c: Context) -> Response:
         return c.text("public")
+
+    app.get("/public", public)
 
     with app.test() as client:
         assert client.get("/public").text == "public"
@@ -90,13 +95,15 @@ def test_a_path_pattern_limits_which_routes_a_middleware_wraps() -> None:
 def test_middleware_given_to_a_route_wraps_only_that_route() -> None:
     app = App()
 
-    @app.get("/admin", auth)
     def admin(c: Context) -> Response:
         return c.text("admin")
 
-    @app.get("/open")
+    app.get("/admin", auth, admin)
+
     def open_(c: Context) -> Response:
         return c.text("open")
+
+    app.get("/open", open_)
 
     with app.test() as client:
         assert client.get("/admin").status == 401
@@ -113,9 +120,10 @@ def test_middleware_sees_the_matched_route_template() -> None:
 
     app.use("*", spy)
 
-    @app.get("/users/{user_id}")
     def user(c: Context) -> Response:
         return c.text("")
+
+    app.get("/users/{user_id}", user)
 
     with app.test() as client:
         client.get("/users/7")

@@ -15,13 +15,15 @@ def test_logger_records_method_path_status_and_duration(caplog: pytest.LogCaptur
     app = App()
     app.use("*", logger())
 
-    @app.get("/hello")
     def hello(c: Context) -> Response:
         return c.text("")
 
-    @app.get("/gone")
+    app.get("/hello", hello)
+
     def gone(c: Context) -> Response:
         raise HTTPError(410, "gone")
+
+    app.get("/gone", gone)
 
     with app.test() as client:
         client.get("/hello")
@@ -44,9 +46,10 @@ def test_logger_includes_the_request_id_when_that_middleware_ran_first(
     app.use("*", request_id())
     app.use("*", logger())
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         return c.text("")
+
+    app.get("/", handler)
 
     with app.test() as client:
         client.get("/", headers={"x-request-id": "rid-1"})

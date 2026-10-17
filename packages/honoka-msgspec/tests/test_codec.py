@@ -13,9 +13,10 @@ class User(msgspec.Struct):
 def test_a_struct_is_encoded_directly_when_the_app_uses_the_msgspec_codec() -> None:
     app = App(json_codec=MsgspecCodec())
 
-    @app.get("/")
     def handler(c: Context) -> Json[User]:
         return c.json(User(name="é"), 201)
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")
@@ -26,9 +27,10 @@ def test_a_struct_is_encoded_directly_when_the_app_uses_the_msgspec_codec() -> N
 def test_the_default_codec_reports_a_struct_as_a_500_instead_of_guessing() -> None:
     app = App()
 
-    @app.get("/")
     def handler(c: Context) -> Json[User]:
         return c.json(User(name="a"))
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")

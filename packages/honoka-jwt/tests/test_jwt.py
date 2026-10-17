@@ -111,9 +111,10 @@ def app_with(middleware: Middleware, key: Key[dict[str, object]] = JWT_PAYLOAD) 
     app = App()
     app.use("/api/*", middleware)
 
-    @app.get("/api/me")
     def me(c: Context) -> Response:
         return c.json({"sub": c.get(key)["sub"]})
+
+    app.get("/api/me", me)
 
     return app
 

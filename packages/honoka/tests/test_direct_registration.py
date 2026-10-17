@@ -1,10 +1,10 @@
-"""`app.get(path, handler)`: Hono's one-expression registration, next to the decorator form."""
+"""`app.get(path, *middleware, handler)`: Hono's one-expression registration, the only form."""
 
 from typing import cast
 
 import pytest
 
-from honoka import App, Context, Middleware, Next, Response
+from honoka import App, Context, Handler, Middleware, Next, Response
 
 
 async def deny(c: Context, call_next: Next) -> Response:
@@ -55,21 +55,15 @@ def test_calls_chain_and_cover_other_verbs_on_and_all() -> None:
     assert seen == ["a", 201, "PUT", "PATCH", "c"]
 
 
-def test_the_decorator_form_still_works_and_returns_the_function() -> None:
+def test_a_call_with_middleware_but_no_handler_is_refused() -> None:
+    """The old `@app.get(path, auth)` decorator form is gone; forgetting the handler must fail
+    loudly at registration, not register `auth` as the handler."""
     app = App()
-
-    @app.get("/plain")
-    def plain(c: Context) -> Response:
-        return c.text("plain")
-
-    @app.get("/guarded", deny)
-    async def guarded(c: Context) -> Response:
-        return c.text("never")
-
-    assert plain.__name__ == "plain"  # the decorator hands the function back
-    with app.test() as client:
-        assert client.get("/plain").text == "plain"
-        assert client.get("/guarded").status == 403
+    with pytest.raises(TypeError, match="handler"):
+        app.get("/x", cast(Handler, deny))
+    nothing = cast(tuple[Handler], ())  # the checker wants a handler; pass none at runtime
+    with pytest.raises(TypeError, match="handler"):
+        app.get("/x", *nothing)
 
 
 def test_two_handlers_are_refused_because_the_first_is_not_middleware() -> None:

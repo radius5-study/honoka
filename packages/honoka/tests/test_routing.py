@@ -1,4 +1,4 @@
-"""Path patterns, route priority and the HTTP method decorators, via the public test client."""
+"""Path patterns, route priority and the HTTP method registrations, via the public test client."""
 
 import re
 
@@ -35,7 +35,7 @@ def echo(app: App, method: str, pattern: str, *names: str) -> None:
     def handler(c: Context) -> Response:
         return c.text(",".join(f"{n}={c.req.param(n)}" for n in names) or c.req.path)
 
-    app.on(method, pattern)(handler)
+    app.on(method, pattern, handler)
 
 
 def test_a_typed_parameter_only_matches_what_its_type_allows() -> None:
@@ -104,7 +104,7 @@ def test_more_specific_routes_win_static_then_typed_then_generic_then_wildcard()
     echo(app, "GET", "/a/*")
     echo(app, "GET", "/a/{name}", "name")
     echo(app, "GET", "/a/{id:int}", "id")
-    app.get("/a/me")(lambda c: c.text("static"))
+    app.get("/a/me", lambda c: c.text("static"))
     with app.test() as client:
         assert client.get("/a/me").text == "static"
         assert client.get("/a/12").text == "id=12"
@@ -163,21 +163,25 @@ def test_a_non_strict_app_ignores_the_trailing_slash() -> None:
 def test_head_options_on_and_all_register_the_methods_they_name() -> None:
     app = App()
 
-    @app.head("/h")
     def head(c: Context) -> Response:
         return c.text("", 204)
 
-    @app.options("/o")
+    app.head("/h", head)
+
     def options(c: Context) -> Response:
         return c.text("custom", 200)
 
-    @app.on(["GET", "POST"], "/m")
+    app.options("/o", options)
+
     def both(c: Context) -> Response:
         return c.text(c.req.method)
 
-    @app.all("/any")
+    app.on(["GET", "POST"], "/m", both)
+
     def anything(c: Context) -> Response:
         return c.text(c.req.method)
+
+    app.all("/any", anything)
 
     with app.test() as client:
         assert client.request("HEAD", "/h").status == 204
@@ -208,7 +212,7 @@ def test_head_options_on_and_all_register_the_methods_they_name() -> None:
 def test_a_malformed_pattern_is_rejected_when_the_route_is_declared(pattern: str) -> None:
     app = App()
     with pytest.raises(ValueError, match="pattern"):
-        app.get(pattern)(lambda c: c.text(""))
+        app.get(pattern, lambda c: c.text(""))
 
 
 def test_sibling_literals_that_share_prefixes_each_keep_their_own_parameters() -> None:
@@ -254,9 +258,10 @@ def test_an_optional_last_segment_matches_with_and_without_it() -> None:
     app = App()
     echo(app, "GET", "/api/animal/{type}?")
 
-    @app.get("/probe")
     def probe(c: Context) -> Response:
         return c.text("")
+
+    app.get("/probe", probe)
 
     with app.test() as client:
         assert client.get("/api/animal").status == 200
@@ -267,9 +272,10 @@ def test_an_optional_last_segment_matches_with_and_without_it() -> None:
 def test_an_optional_parameter_is_absent_from_params_when_left_out() -> None:
     app = App()
 
-    @app.get("/files/{name:slug}?")
     def files(c: Context) -> Response:
         return c.text(c.req.params.get("name", "none"))
+
+    app.get("/files/{name:slug}?", files)
 
     with app.test() as client:
         assert client.get("/files").text == "none"
@@ -320,7 +326,7 @@ def test_newlines_in_a_path_are_matched_the_same_way_by_every_router() -> None:
 def test_a_regex_that_looks_outside_its_own_segment_is_rejected(pattern: str) -> None:
     app = App()
     with pytest.raises(ValueError, match="pattern"):
-        app.get(pattern)(lambda c: c.text(""))
+        app.get(pattern, lambda c: c.text(""))
 
 
 def test_a_caret_inside_a_character_class_is_not_an_anchor() -> None:

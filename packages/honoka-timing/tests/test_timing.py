@@ -11,9 +11,10 @@ def test_timing_adds_a_server_timing_header() -> None:
     app = App()
     app.use("*", timing())
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         return c.text("")
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")

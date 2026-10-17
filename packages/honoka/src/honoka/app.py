@@ -205,12 +205,17 @@ class App:
         steps: tuple[Middleware | Handler, ...],
         inline: bool,
         meta: Mapping[str, object],
-    ) -> Self | Callable[[Handler], Handler]:
-        """With a handler as the last step register it now and return the app (so calls chain);
-        with middleware only, return the decorator that registers the function it wraps."""
+    ) -> Self:
+        """Register `steps[-1]` as the handler and the steps before it as its middleware."""
         verbs = tuple(dict.fromkeys(m.upper() for m in methods))
         if not verbs:
             raise ValueError("a route needs at least one HTTP method")
+        if not steps or takes_next(steps[-1]):
+            raise TypeError(
+                "the last argument must be the handler: a function of one parameter (c)"
+            )
+        handler = cast(Handler, steps[-1])
+        middleware = cast(tuple[Middleware, ...], steps[:-1])
         paths = [path] if isinstance(path, str) else list(path)
         patterns = [
             self._base + variant if variant != "/" or not self._base else self._base
@@ -218,20 +223,11 @@ class App:
             for variant in expand_optional(given)
         ]
         for pattern in patterns:
-            parse_pattern(pattern)  # a bad pattern fails here, at registration, not on a request
-        direct = bool(steps) and not takes_next(steps[-1])
-        middleware = cast(tuple[Middleware, ...], steps[:-1] if direct else steps)
-
-        def decorator(handler: Handler) -> Handler:
-            for pattern in patterns:
-                for verb in verbs:
-                    self._add(Route(verb, pattern, handler, middleware, inline, dict(meta)))
-            return handler
-
-        if direct:
-            decorator(cast(Handler, steps[-1]))
-            return self
-        return decorator
+            parse_pattern(pattern)  # a bad pattern fails here, before anything is registered
+        for pattern in patterns:
+            for verb in verbs:
+                self._add(Route(verb, pattern, handler, middleware, inline, dict(meta)))
+        return self
 
     def _add(self, route: Route) -> None:
         pattern = route.pattern
@@ -272,17 +268,13 @@ class App:
             raise ValueError("mount needs a prefix other than '/': it would swallow every route")
         self._mounts.append((full, app))
 
-    def ws[H: WebSocketHandler](self, path: str) -> Callable[[H], H]:
+    def ws(self, path: str, handler: WebSocketHandler) -> Self:
         """Register a WebSocket handler: `async def chat(ws: WebSocket)`. It must `accept()`."""
         pattern = self._base + path
         parse_pattern(pattern)
-
-        def decorator(handler: H) -> H:
-            self._websockets.append((pattern, handler))
-            self._router = None
-            return handler
-
-        return decorator
+        self._websockets.append((pattern, handler))
+        self._router = None
+        return self
 
     def on_startup[F: Hook](self, hook: F) -> F:
         self._startup.append(hook)
@@ -318,11 +310,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def query[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def query(
         self,
         path: str,
@@ -335,7 +322,7 @@ class App:
 
     def query(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         """The HTTP `QUERY` method: a safe request that carries a body."""
         return self._route(("QUERY",), path, steps, inline, meta)
 
@@ -345,11 +332,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def get[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def get(
         self,
         path: str,
@@ -362,7 +344,7 @@ class App:
 
     def get(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         return self._route(("GET",), path, steps, inline, meta)
 
     @overload
@@ -371,11 +353,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def post[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def post(
         self,
         path: str,
@@ -388,7 +365,7 @@ class App:
 
     def post(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         return self._route(("POST",), path, steps, inline, meta)
 
     @overload
@@ -397,11 +374,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def put[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def put(
         self,
         path: str,
@@ -414,7 +386,7 @@ class App:
 
     def put(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         return self._route(("PUT",), path, steps, inline, meta)
 
     @overload
@@ -423,11 +395,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def patch[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def patch(
         self,
         path: str,
@@ -440,7 +407,7 @@ class App:
 
     def patch(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         return self._route(("PATCH",), path, steps, inline, meta)
 
     @overload
@@ -449,11 +416,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def delete[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def delete(
         self,
         path: str,
@@ -466,7 +428,7 @@ class App:
 
     def delete(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         return self._route(("DELETE",), path, steps, inline, meta)
 
     @overload
@@ -475,11 +437,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def head[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def head(
         self,
         path: str,
@@ -492,7 +449,7 @@ class App:
 
     def head(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         return self._route(("HEAD",), path, steps, inline, meta)
 
     @overload
@@ -501,11 +458,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def options[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def options(
         self,
         path: str,
@@ -518,7 +470,7 @@ class App:
 
     def options(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         return self._route(("OPTIONS",), path, steps, inline, meta)
 
     @overload
@@ -534,16 +486,6 @@ class App:
     ) -> Self: ...
 
     @overload
-    def on[H: Handler](
-        self,
-        methods: str | Sequence[str],
-        path: str | Sequence[str],
-        *middleware: Middleware,
-        inline: bool = False,
-        **meta: object,
-    ) -> Callable[[H], H]: ...
-
-    @overload
     def on(
         self,
         methods: str | Sequence[str],
@@ -562,9 +504,9 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self | Callable[[Handler], Handler]:
-        """Register one handler for several methods and paths: `app.on(["GET", "POST"], ["/form", "/ja/form"], handler)`
-        or as a decorator. A method may be any token, e.g. `"PURGE"`."""
+    ) -> Self:
+        """Register one handler for several methods and paths: `app.on(["GET", "POST"], ["/form", "/ja/form"], handler)`.
+        A method may be any token, e.g. `"PURGE"`."""
         verbs = (methods,) if isinstance(methods, str) else tuple(methods)
         return self._route(verbs, path, steps, inline, meta)
 
@@ -572,11 +514,6 @@ class App:
     def all(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
     ) -> Self: ...
-
-    @overload
-    def all[H: Handler](
-        self, path: str, *middleware: Middleware, inline: bool = False, **meta: object
-    ) -> Callable[[H], H]: ...
 
     @overload
     def all(
@@ -591,7 +528,7 @@ class App:
 
     def all(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self | Callable[[Handler], Handler]:
+    ) -> Self:
         """Register one handler for every common method (not `CONNECT` or `TRACE`)."""
         return self._route(ALL_METHODS, path, steps, inline, meta)
 

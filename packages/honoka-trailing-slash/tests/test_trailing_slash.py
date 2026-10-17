@@ -9,17 +9,20 @@ def trailing_app() -> App:
     app = App()
     app.use("*", trim_trailing_slash())
 
-    @app.get("/users")
     def users(c: Context) -> Response:
         return c.text("users")
 
-    @app.get("/docs/")
+    app.get("/users", users)
+
     def docs(c: Context) -> Response:
         return c.text("docs")
 
-    @app.post("/users")
+    app.get("/docs/", docs)
+
     def create(c: Context) -> Response:
         return c.text("created")
+
+    app.post("/users", create)
 
     return app
 

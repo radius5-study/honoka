@@ -114,20 +114,20 @@ async def get_user(c: Context) -> Json[User]:
 app.get("/users/{user_id}", get_user)
 ```
 
-- Direct registration is the primary form; the decorator form is sugar for naming a function once. Decorators return the function **as is, without wrapping it** (so that types are not broken)
+- Routes are registered by calling, never by decorator: a decorator would register as a side effect while pretending to wrap the function, and Hono has none. Handlers are stored **as they are, without wrapping** (so that types are not broken)
 - A handler can also be given directly, as in Hono: `app.get("/health", lambda c: c.text("ok"))`. A `lambda` is one expression with no `await`, so real handlers stay `def`/`async def` and are passed by name when registered this way
 - The handler signature is unified as `(c: Context) -> Response`; handlers that return a typed body annotate `Json[T]` (a subtype of `Response`)
 - `c.req.param(name, type)` raises a structured 400 when the conversion fails
 - Route groups: `app.route("/users", users_app)` mounts a sub-app under a prefix (Hono's `app.route`)
 - Lifecycle: `@app.on_startup` / `@app.on_shutdown` hooks create and close app-wide resources (e.g., DB pools), which are published with `app.provide(KEY, value)`
-- Methods: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, `query` (the HTTP `QUERY` method); `app.on(["GET", "POST"], ["/a", "/ja/a"])` registers one handler for several methods and paths (a method may be any token, e.g. `"PURGE"`) and `app.all(path)` for every common one. Every one of them takes either form: `app.get(path, *middleware, handler)` registers at once and returns the app, so calls chain as in Hono (`app.get(...).post(...)`); without a handler it returns a decorator (`@app.get(path, *middleware)`). The last argument is the handler when it takes one parameter `(c)`, and middleware when it takes `(c, next)` (the rule `on_error` already uses). Passing two handlers is a type error and a `TypeError` at registration
+- Methods: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, `query` (the HTTP `QUERY` method); `app.on(["GET", "POST"], ["/a", "/ja/a"])` registers one handler for several methods and paths (a method may be any token, e.g. `"PURGE"`) and `app.all(path)` for every common one. Every one of them is `app.get(path, *middleware, handler)`: the last argument is the handler, the ones before it are middleware, and the call returns the app, so calls chain as in Hono (`app.get(...).post(...)`). A handler is a function of one parameter `(c)`; passing middleware as the last argument is a `TypeError` at registration, and a missing handler is a type error
 - Route patterns: a segment is a literal, `{name}` (any non-empty text), `{name:int|float|uuid|slug}`, `{rest:path}` (the rest of the path, last segment only), `{name:re:REGEX}` (Hono's `:name{regex}`; no capturing groups, must not match the empty string, and it may span `/` as in `{file:re:.+\.png}`), a lone `*` (any one non-empty segment, or the prefix and everything below it when last), or `prefix*` (a segment starting with `prefix`, possibly nothing more). A `*` elsewhere inside a segment is an ordinary character (Hono v5). A trailing `}?` makes the last segment optional (`/api/animal/{type}?` is `/api/animal` and `/api/animal/{type}`; `c.req.params` lacks `type` when it is left out). A value a converter rejects is a 404, not a 400. Priority at one position: literal, then fixed converters (`int`, `float`, `uuid`, `slug`), then `re:`, then `{name}`, then `path`, then `*`. A bad pattern raises `ValueError` when the route is declared
 - Groups: `app.route(prefix, sub)` mounts a sub-app; `app.base_path("/api")` returns a view of the same app whose routes, middleware and fallbacks sit below the prefix (Hono's `basePath`); `app.mount(prefix, asgi_app)` serves any other ASGI app below a prefix, answering before this app's routes and middleware
 - Routing on something other than the path: `App(get_path=fn)` (Hono's `getPath`, e.g. to route on the host)
-- WebSocket: `@app.ws("/chat/{room}")` registers `async def handler(ws: WebSocket)`; the handler calls `accept()`, then `receive_text/bytes/json`, `send_text/bytes/json`, `close()`, or iterates `async for message in ws`. Middleware does not run for WebSocket routes; a path with no handler is refused. `client.websocket(path)` drives it in tests
+- WebSocket: `app.ws("/chat/{room}", handler)` registers `async def handler(ws: WebSocket)`; the handler calls `accept()`, then `receive_text/bytes/json`, `send_text/bytes/json`, `close()`, or iterates `async for message in ws`. Middleware does not run for WebSocket routes; a path with no handler is refused. `client.websocket(path)` drives it in tests
 - Trailing slash: strict by default (`/a/` is not `/a`); `App(strict=False)` treats them as one path, as in Hono
 - Router: paths without parameters are a dict lookup; the others are folded into a trie and compiled into one regular expression per method (Hono's RegExpRouter). Like Hono's SmartRouter, the first request tries the RegExpRouter and falls back to walking the trie only if building the expression raises `UnsupportedPathError`; with neither usable it fails loudly. `App(router=...)` takes any router factory. The fallback is a safety net, never a speed choice, and both paths share one test suite
-- Route metadata: decorators accept extra keyword options (e.g., `responses={...}`, `tool=True`) and store them in `app.route_table()`. The core never interprets them; plugins do
+- Route metadata: the registration call accepts extra keyword options (e.g., `responses={...}`, `tool=True`) and store them in `app.route_table()`. The core never interprets them; plugins do
 
 ### 5.2 Context
 
@@ -183,7 +183,7 @@ app.use("/admin/*", auth)
 ```
 
 - The next-function is named `call_next` (not `next`) so that it does not shadow the builtin (ruff `A002`)
-- Middleware is async. Handlers can also be attached per route: `@app.get("/users/{user_id}", auth)`
+- Middleware is async. Handlers can also be attached per route: `app.get("/users/{user_id}", auth, get_user)`
 
 - Path matching is completed in the core (pure Python in v0/v1; it may move to Rust, see 12.2), and the middleware chain of each route is composed once at registration
 
@@ -338,8 +338,8 @@ Selected from Hono's helpers (accepts, adapter, conninfo, cookie, css, dev, fact
 | v1 (core) | cookie extras | `c.cookie(..., expires, priority, partitioned, prefix="secure"\|"host")` with Hono's rules (400-day limit, `__Host-` needs path `/` and no domain), `c.signed_cookie(name, value, secret)` / `c.req.signed_cookie(name, secret)` (HMAC-SHA256; `False` when the signature fails), `generate_cookie(...)`, `c.req.cookie()` for all cookies, `c.delete_cookie(...)` returning the old value |
 | v1 (core) | request | `c.req.header()` / `c.req.cookie()` / `c.req.query()` / `c.req.queries()` without a name return everything; `c.req.url`, `c.req.text()`, `c.req.parse_body(all=, dot=)` (urlencoded and multipart, files as `UploadedFile`), `c.req.scope` (the raw ASGI scope, for adapters) |
 | v1 (core) | exception | `HTTPError(status, code, detail, response=Response(...))` carries its own response (Hono's `HTTPException` `res`); `err.get_response()` |
-| v1 (core) | websocket | `@app.ws(path)` over the ASGI websocket scope (5.1) |
-| Not adopted | factory | Decorators return the function unchanged and `Context` has no type parameters, so `Handler`, `Middleware`, and `Next` type aliases are enough |
+| v1 (core) | websocket | `app.ws(path, handler)` over the ASGI websocket scope (5.1) |
+| Not adopted | factory | Handlers are stored unchanged and `Context` has no type parameters, so `Handler`, `Middleware`, and `Next` type aliases are enough |
 | Not adopted | adapter | One app object with two entries (4.3), not a per-platform adapter package |
 | Not adopted | css, ssg, proxy | Outside an API-first framework; a proxy needs an HTTP client dependency |
 

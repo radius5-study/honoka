@@ -11,13 +11,15 @@ def csrf_app(**options: object) -> App:
     app = App()
     app.use("*", csrf(**options))  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
-    @app.post("/transfer")
     def transfer(c: Context) -> Response:
         return c.text("done")
 
-    @app.get("/page")
+    app.post("/transfer", transfer)
+
     def page(c: Context) -> Response:
         return c.text("page")
+
+    app.get("/page", page)
 
     return app
 

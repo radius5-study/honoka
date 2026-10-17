@@ -27,13 +27,15 @@ def build(mw: Middleware) -> App:
     app = App()
     app.use("*", mw)
 
-    @app.get("/")
     def root(c: Context) -> Response:
         return c.text("ok")
 
-    @app.get("/api/public/x")
+    app.get("/", root)
+
     def public(c: Context) -> Response:
         return c.text("public")
+
+    app.get("/api/public/x", public)
 
     return app
 

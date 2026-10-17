@@ -24,11 +24,11 @@ def docs(
     this call still appear. Scalar is loaded from a pinned URL with a Subresource Integrity hash;
     pass your own `scalar_url` (and its hash, or `None`) to self-host."""
 
-    @app.get(spec_path, openapi=False)
     async def spec(c: Context) -> Response:
         return c.json(build(app, title=title, version=version))
 
-    @app.get(path, openapi=False)
+    app.get(spec_path, spec, openapi=False)
+
     async def page(c: Context) -> Response:
         integrity = (
             f' integrity="{html.escape(scalar_integrity)}" crossorigin="anonymous"'
@@ -42,3 +42,5 @@ def docs(
             f'<body><script id="api-reference" data-url="{html.escape(spec_path)}"></script>'
             f'<script src="{html.escape(scalar_url)}"{integrity}></script></body></html>'
         )
+
+    app.get(path, page, openapi=False)

@@ -10,11 +10,12 @@ def test_secure_headers_adds_defaults_without_overriding_what_a_handler_set() ->
     app = App()
     app.use("*", secure_headers())
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         response = c.text("")
         response.headers.append(("x-frame-options", "DENY"))
         return response
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")
@@ -28,9 +29,10 @@ def test_a_secure_header_can_be_replaced_or_disabled() -> None:
     app = App()
     app.use("*", secure_headers(referrer_policy="origin", x_frame_options=None))
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         return c.text("")
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")

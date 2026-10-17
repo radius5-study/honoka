@@ -59,35 +59,40 @@ def make_app() -> App:
     calls: list[str] = []
     app.calls = calls  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
 
-    @app.post("/users", validator(json=CreateUser, query=Search))
     def create(c: Context) -> Response:
         calls.append("create")
         body = c.req.valid(CreateUser)
         query = c.req.valid(Search)
         return c.json({"name": body.name, "age": body.age, "page": query.page, "tag": query.tag})
 
-    @app.post("/batch", validator(json=Batch))
+    app.post("/users", validator(json=CreateUser, query=Search), create)
+
     def batch(c: Context) -> Response:
         return c.text(str(len(c.req.valid(Batch).users)))
 
-    @app.get("/headers", validator(header=RequestHeaders))
+    app.post("/batch", validator(json=Batch), batch)
+
     def headers(c: Context) -> Response:
         return c.text(c.req.valid(RequestHeaders).x_request_id)
 
-    @app.get("/cookies", validator(cookie=Session))
+    app.get("/headers", validator(header=RequestHeaders), headers)
+
     def cookies(c: Context) -> Response:
         return c.text(c.req.valid(Session).session)
 
-    @app.get("/users/{user_id}", validator(param=UserPath))
+    app.get("/cookies", validator(cookie=Session), cookies)
+
     def user(c: Context) -> Response:
         return c.text(str(c.req.valid(UserPath).user_id + 1))
 
-    @app.post("/login", validator(form=Login))
+    app.get("/users/{user_id}", validator(param=UserPath), user)
+
     def login(c: Context) -> Response:
         form = c.req.valid(Login)
         return c.json({"user": form.user, "remember": form.remember})
 
-    @app.post("/same", validator(json=Search, query=Search))
+    app.post("/login", validator(form=Login), login)
+
     def same(c: Context) -> Response:
         try:
             c.req.valid(Search)
@@ -103,13 +108,16 @@ def make_app() -> App:
             }
         )
 
-    @app.get("/not-validated")
+    app.post("/same", validator(json=Search, query=Search), same)
+
     def not_validated(c: Context) -> Response:
         try:
             c.req.valid(CreateUser)
         except LookupError as exc:
             return c.text(str(exc))
         return c.text("found")
+
+    app.get("/not-validated", not_validated)
 
     return app
 

@@ -7,9 +7,10 @@ def _app(name: str | None = None) -> App:
     app = App()
     app.use("*", powered_by() if name is None else powered_by(name))
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         return c.text("ok")
+
+    app.get("/", handler)
 
     return app
 

@@ -33,13 +33,13 @@ def build(tmp_path: Path) -> tuple[App, list[str]]:
 
     app.use("*", stamp)
 
-    @app.get("/text", inline=True)
     def text(c: Context) -> Response:
         c.cookie("a", "1", max_age=5)
         c.cookie("b", "2")
         return c.text("héllo")
 
-    @app.get("/users/{user_id:int}")
+    app.get("/text", text, inline=True)
+
     async def user(c: Context) -> Json[dict[str, object]]:
         return c.json(
             {
@@ -51,19 +51,23 @@ def build(tmp_path: Path) -> tuple[App, list[str]]:
             }
         )
 
-    @app.post("/echo")
+    app.get("/users/{user_id:int}", user)
+
     async def echo(c: Context) -> Response:
         return c.json({"body": await c.req.json()}, 201)
 
-    @app.get("/boom")
+    app.post("/echo", echo)
+
     def boom(c: Context) -> Response:
         raise HTTPError(418, "teapot", "short and stout")
 
-    @app.get("/crash")
+    app.get("/boom", boom)
+
     def crash(c: Context) -> Response:
         raise RuntimeError("secret")
 
-    @app.get("/stream")
+    app.get("/crash", crash)
+
     async def stream(c: Context) -> Response:
         async def chunks() -> AsyncIterator[str]:
             for part in ("one", "two", "three"):
@@ -71,25 +75,32 @@ def build(tmp_path: Path) -> tuple[App, list[str]]:
 
         return c.stream(chunks(), content_type="text/plain")
 
-    @app.get("/file")
+    app.get("/stream", stream)
+
     def file(c: Context) -> Response:
         return c.file(tmp_path / "note.txt", filename="n.txt")
 
-    @app.get("/jump")
+    app.get("/file", file)
+
     def jump(c: Context) -> Response:
         return c.redirect("/日本語")
 
-    @app.get("/who")
+    app.get("/jump", jump)
+
     def who(c: Context) -> Response:
         return c.text(f"{c.req.cookie('a')}|{c.req.cookie('b')}|{c.req.header('x-multi')}")
 
-    @app.get("/files/*")
+    app.get("/who", who)
+
     def wild(c: Context) -> Response:
         return c.text(c.req.path)
 
-    @app.get("/log")
+    app.get("/files/*", wild)
+
     def show(c: Context) -> Response:
         return c.text(",".join(log))
+
+    app.get("/log", show)
 
     return app, log
 

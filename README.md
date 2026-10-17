@@ -29,9 +29,9 @@ app.get("/health", lambda c: c.text("ok")).get("/users/{id:int}", get_user).post
 )
 ```
 
-Registration is a call: `app.get(path, *middleware, handler)` returns the app, so calls chain as in
-Hono. A `lambda` is fine for one expression; anything with `await` is a `def` passed by name.
-The decorator form (`@app.get("/users")` on a `def`) works too.
+Registration is a call, as in Hono: `app.get(path, *middleware, handler)` returns the app, so calls
+chain. A `lambda` is fine for one expression; anything with `await` is a `def` passed by name.
+There are no route decorators.
 
 ```sh
 granian --interface asgi app:app      # or uvicorn; host adapters such as Cloudflare Workers are separate packages

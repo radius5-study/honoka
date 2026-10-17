@@ -44,9 +44,10 @@ def test_when_every_step_hands_over_the_built_in_404_answers() -> None:
 def test_c_not_found_runs_the_not_found_steps_from_inside_a_handler() -> None:
     app = App()
 
-    @app.get("/users/{id}")
     async def user(c: Context) -> Response:
         c.not_found()
+
+    app.get("/users/{id}", user)
 
     @app.not_found
     def custom(c: Context) -> Response:
@@ -60,13 +61,15 @@ def test_c_not_found_runs_the_not_found_steps_from_inside_a_handler() -> None:
 def test_an_on_error_step_reads_c_error_and_may_hand_over_to_the_built_in_answer() -> None:
     app = App()
 
-    @app.get("/teapot")
     def teapot(c: Context) -> Response:
         raise HTTPError(418, "teapot")
 
-    @app.get("/boom")
+    app.get("/teapot", teapot)
+
     def boom(c: Context) -> Response:
         raise RuntimeError("secret")
+
+    app.get("/boom", boom)
 
     @app.on_error
     async def only_runtime(c: Context, call_next: Next) -> Response:
@@ -84,13 +87,15 @@ def test_an_on_error_step_reads_c_error_and_may_hand_over_to_the_built_in_answer
 def test_on_error_registrations_are_scoped_by_path_and_stack() -> None:
     app = App()
 
-    @app.get("/api/x")
     def api(c: Context) -> Response:
         raise RuntimeError
 
-    @app.get("/web/x")
+    app.get("/api/x", api)
+
     def web(c: Context) -> Response:
         raise RuntimeError
+
+    app.get("/web/x", web)
 
     app.on_error("/api/*", lambda c: c.json({"where": "api"}, 500))
 
@@ -102,9 +107,10 @@ def test_on_error_registrations_are_scoped_by_path_and_stack() -> None:
 def test_an_on_error_that_raises_is_answered_by_the_built_in_500() -> None:
     app = App()
 
-    @app.get("/boom")
     def boom(c: Context) -> Response:
         raise RuntimeError
+
+    app.get("/boom", boom)
 
     @app.on_error
     def broken(c: Context) -> Response:

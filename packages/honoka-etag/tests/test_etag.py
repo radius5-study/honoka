@@ -12,31 +12,36 @@ def make_app(mw: Middleware | None = None) -> App:
     app = App()
     app.use("*", etag() if mw is None else mw)
 
-    @app.get("/")
     def index(c: Context) -> Response:
         return c.text(
             "hello",
             headers={"cache-control": "max-age=60", "x-extra": "1"},
         )
 
-    @app.get("/preset")
+    app.get("/", index)
+
     def preset(c: Context) -> Response:
         return c.text("hello", headers={"etag": '"mine"'})
 
-    @app.get("/stream")
+    app.get("/preset", preset)
+
     def stream(c: Context) -> Response:
         async def chunks() -> AsyncIterator[str]:
             yield "x"
 
         return Stream(chunks())
 
-    @app.get("/empty")
+    app.get("/stream", stream)
+
     def empty(c: Context) -> Response:
         return c.text("")
 
-    @app.post("/")
+    app.get("/empty", empty)
+
     def post(c: Context) -> Response:
         return c.text("hello")
+
+    app.post("/", post)
 
     return app
 
@@ -103,9 +108,10 @@ def test_retain_headers_replaces_the_kept_list() -> None:
     app = App()
     app.use("*", etag(retained_headers=["etag", "x-extra"]))
 
-    @app.get("/")
     def index(c: Context) -> Response:
         return c.text("hello", headers={"x-extra": "1", "cache-control": "no-store"})
+
+    app.get("/", index)
 
     with app.test() as client:
         resp = client.get("/", headers={"if-none-match": "*"})
@@ -118,10 +124,11 @@ def test_an_etag_set_with_c_header_is_the_one_a_conditional_request_is_compared_
     app = App()
     app.use("*", etag())
 
-    @app.get("/")
     def index(c: Context) -> Response:
         c.header("etag", '"v1"')
         return c.text("hello")
+
+    app.get("/", index)
 
     with app.test() as client:
         full = client.get("/")

@@ -17,20 +17,23 @@ def test_a_sub_app_is_mounted_under_a_prefix_with_its_own_middleware_scoped_to_i
 
     users.use("*", mark)
 
-    @users.get("/")
     def index(c: Context) -> Response:
         return c.text("list")
 
-    @users.get("/{user_id}")
+    users.get("/", index)
+
     def show(c: Context) -> Response:
         return c.text(f"user {c.req.param('user_id')}")
+
+    users.get("/{user_id}", show)
 
     app = App()
     app.route("/users", users)
 
-    @app.get("/health")
     def health(c: Context) -> Response:
         return c.text("ok")
+
+    app.get("/health", health)
 
     with app.test() as client:
         listing = client.get("/users")
@@ -62,10 +65,11 @@ def test_startup_hooks_run_before_requests_and_shutdown_hooks_after_in_reverse()
     async def second_down() -> None:
         events.append("down 2")
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         events.append("request")
         return c.text("")
+
+    app.get("/", handler)
 
     with app.test() as client:
         client.get("/")
@@ -81,9 +85,10 @@ def test_a_value_published_at_startup_is_readable_by_every_request() -> None:
     def connect() -> None:
         app.provide(DB, "pool")
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         return c.text(c.get(DB))
+
+    app.get("/", handler)
 
     with app.test() as client:
         assert client.get("/").text == "pool"

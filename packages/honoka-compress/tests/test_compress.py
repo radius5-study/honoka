@@ -17,32 +17,38 @@ def make_app(mw: Middleware | None = None) -> App:
     app = App()
     app.use("*", compress() if mw is None else mw)
 
-    @app.get("/big")
     def big(c: Context) -> Response:
         return c.text(BIG, headers={"content-length": str(len(BIG)), "etag": '"v1"'})
 
-    @app.get("/small")
+    app.get("/big", big)
+
     def small(c: Context) -> Response:
         return c.text("tiny")
 
-    @app.get("/image")
+    app.get("/small", small)
+
     def image(c: Context) -> Response:
         return c.body(BIG, content_type="image/png")
 
-    @app.get("/encoded")
+    app.get("/image", image)
+
     def encoded(c: Context) -> Response:
         return c.text(BIG, headers={"content-encoding": "br"})
 
-    @app.get("/notransform")
+    app.get("/encoded", encoded)
+
     def notransform(c: Context) -> Response:
         return c.text(BIG, headers={"cache-control": "no-transform"})
 
-    @app.get("/stream")
+    app.get("/notransform", notransform)
+
     def stream(c: Context) -> Response:
         async def chunks() -> AsyncIterator[str]:
             yield BIG
 
         return Stream(chunks(), headers=[("content-type", "text/plain")])
+
+    app.get("/stream", stream)
 
     return app
 
@@ -126,10 +132,11 @@ def test_a_content_encoding_set_with_c_header_is_respected() -> None:
     app.use("*", compress())
     payload = gzip.compress(b"x" * 3000)
 
-    @app.get("/already")
     def already(c: Context) -> Response:
         c.header("content-encoding", "gzip")
         return c.body(payload, headers={"content-type": "text/plain"})
+
+    app.get("/already", already)
 
     with app.test() as client:
         resp = client.get("/already", headers={"accept-encoding": "gzip"})
@@ -141,13 +148,14 @@ def test_a_partial_response_is_left_alone() -> None:
     app = App()
     app.use("*", compress())
 
-    @app.get("/range")
     def part(c: Context) -> Response:
         return c.body(
             b"x" * 2000,
             206,
             {"content-type": "text/plain", "content-range": "bytes 0-1999/9000"},
         )
+
+    app.get("/range", part)
 
     with app.test() as client:
         resp = client.get("/range", headers={"accept-encoding": "gzip"})

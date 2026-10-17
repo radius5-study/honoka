@@ -16,18 +16,21 @@ def require_auth(c: Context) -> None:
         raise HTTPError(401, "unauthorized")
 
 
-@app.get("/health", inline=True)
 def health(c: Context) -> Response:
     return c.text("ok")
 
 
-@app.get("/products", validator(query=shop.ProductQuery))
+app.get("/health", health, inline=True)
+
+
 async def products(c: Context) -> Json[dict[str, object]]:
     await shop.database(shop.READ_LATENCY)
     return c.json(shop.list_products_for(c.req.valid(shop.ProductQuery)))
 
 
-@app.get("/products/{product_id}")
+app.get("/products", validator(query=shop.ProductQuery), products)
+
+
 async def product(c: Context) -> Json[dict[str, object]]:
     await shop.database(shop.READ_LATENCY)
     try:
@@ -36,7 +39,9 @@ async def product(c: Context) -> Json[dict[str, object]]:
         raise HTTPError(exc.status, exc.code) from exc
 
 
-@app.post("/orders", validator(json=shop.NewOrder))
+app.get("/products/{product_id}", product)
+
+
 async def create_order(c: Context) -> Json[dict[str, object]]:
     require_auth(c)
     await shop.database(shop.WRITE_LATENCY)
@@ -46,7 +51,9 @@ async def create_order(c: Context) -> Json[dict[str, object]]:
         raise HTTPError(exc.status, exc.code) from exc
 
 
-@app.get("/orders/{order_id}")
+app.post("/orders", validator(json=shop.NewOrder), create_order)
+
+
 async def order(c: Context) -> Json[dict[str, object]]:
     require_auth(c)
     await shop.database(shop.READ_LATENCY)
@@ -54,3 +61,6 @@ async def order(c: Context) -> Json[dict[str, object]]:
         return c.json(shop.get_order(c.req.param("order_id", int)))
     except shop.ShopError as exc:
         raise HTTPError(exc.status, exc.code) from exc
+
+
+app.get("/orders/{order_id}", order)

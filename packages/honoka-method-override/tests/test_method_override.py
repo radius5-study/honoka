@@ -16,17 +16,20 @@ type AsgiApp = Callable[[AsgiScope, Receive, Send], Awaitable[None]]
 def build() -> App:
     app = App()
 
-    @app.post("/posts/1")
     async def create(c: Context) -> Response:
         return c.text("post:" + (await c.req.body()).decode())
 
-    @app.delete("/posts/1")
+    app.post("/posts/1", create)
+
     async def delete(c: Context) -> Response:
         return c.text("delete:" + (await c.req.body()).decode())
 
-    @app.put("/posts/1")
+    app.delete("/posts/1", delete)
+
     def put(c: Context) -> Response:
         return c.text("put")
+
+    app.put("/posts/1", put)
 
     return app
 
@@ -116,9 +119,10 @@ def test_only_put_patch_and_delete_can_be_the_override() -> None:
     """A cross-site form that says `_method=GET` must not turn into a "safe" request."""
     app = App()
 
-    @app.on(["GET", "POST"], "/x")
     def x(c: Context) -> Response:
         return c.text(c.req.method)
+
+    app.on(["GET", "POST"], "/x", x)
 
     wrapped = method_override(app)
     for forced in ("GET", "HEAD", "OPTIONS", "CONNECT", "TRACE"):
@@ -145,11 +149,12 @@ def test_an_oversized_form_is_not_read_to_the_end_and_still_reaches_the_app_whol
 
     app = App()
 
-    @app.post("/upload")
     async def upload(c: Context) -> Response:
         consumed_when_the_app_started.append(taken)
         received.append(len(await c.req.body()))
         return c.text("ok")
+
+    app.post("/upload", upload)
 
     scope: AsgiScope = {
         "type": "http",

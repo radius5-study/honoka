@@ -42,13 +42,15 @@ def test_misses_and_other_methods_fall_through(tmp_path: Path) -> None:
     app = App()
     app.use("*", serve_static(root=site(tmp_path)))
 
-    @app.get("/api")
     def api(c: Context) -> Response:
         return c.text("api")
 
-    @app.post("/hello.txt")
+    app.get("/api", api)
+
     def post(c: Context) -> Response:
         return c.text("posted")
+
+    app.post("/hello.txt", post)
 
     with app.test() as client:
         api_resp = client.get("/api")

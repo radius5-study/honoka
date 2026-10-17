@@ -10,13 +10,15 @@ def cors_app(**options: object) -> App:
     app = App()
     app.use("*", cors(**options))  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
-    @app.get("/data")
     def data(c: Context) -> Response:
         return c.text("data")
 
-    @app.get("/forbidden")
+    app.get("/data", data)
+
     def forbidden(c: Context) -> Response:
         raise HTTPError(403, "forbidden")
+
+    app.get("/forbidden", forbidden)
 
     return app
 

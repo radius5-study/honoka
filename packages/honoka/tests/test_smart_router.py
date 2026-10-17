@@ -97,9 +97,10 @@ def test_a_route_cannot_be_added_after_the_choice_is_made() -> None:
 def test_an_app_can_be_given_the_router_it_should_use(factory: RouterFactory) -> None:
     app = App(router=factory)
 
-    @app.get("/n/{id:int}")
     def handler(c: Context) -> Response:
         return c.text(c.req.param("id"))
+
+    app.get("/n/{id:int}", handler)
 
     with app.test() as client:
         assert client.get("/n/12").text == "12"

@@ -14,13 +14,15 @@ def _app(mw: Middleware) -> App:
     app = App()
     app.use("*", mw)
 
-    @app.get("/")
     def j(c: Context) -> Response:
         return c.json(DATA)
 
-    @app.get("/t")
+    app.get("/", j)
+
     def t(c: Context) -> Response:
         return c.text('{"a":1}')
+
+    app.get("/t", t)
 
     return app
 
@@ -61,9 +63,10 @@ def test_a_custom_json_codec_keeps_working_when_the_response_is_indented() -> No
     app = App(json_codec=DateCodec())
     app.use("*", pretty_json())
 
-    @app.get("/")
     def home(c: Context) -> Response:
         return c.json({"at": datetime(2026, 10, 17, tzinfo=UTC)})
+
+    app.get("/", home)
 
     with app.test() as client:
         resp = client.get("/?pretty")

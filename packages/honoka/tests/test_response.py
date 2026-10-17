@@ -9,12 +9,13 @@ from honoka import App, Context, Response
 def test_set_and_delete_cookie_emit_one_set_cookie_header_each() -> None:
     app = App()
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         c.cookie("sid", "abc", max_age=60)
         c.cookie("theme", "dark", http_only=False, same_site="Strict", secure=True)
         c.delete_cookie("old")
         return c.text("ok")
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")
@@ -30,10 +31,11 @@ def test_set_and_delete_cookie_emit_one_set_cookie_header_each() -> None:
 def test_cookies_set_before_an_error_still_reach_the_client() -> None:
     app = App()
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         c.cookie("sid", "abc")
         raise RuntimeError("boom")
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")
@@ -45,7 +47,6 @@ def test_cookies_set_before_an_error_still_reach_the_client() -> None:
 def test_stream_sends_chunks_in_order_with_the_given_content_type() -> None:
     app = App()
 
-    @app.get("/stream")
     async def stream(c: Context) -> Response:
         async def chunks() -> AsyncIterator[str | bytes]:
             yield "one,"
@@ -53,6 +54,8 @@ def test_stream_sends_chunks_in_order_with_the_given_content_type() -> None:
             yield "three"
 
         return c.stream(chunks(), content_type="text/csv")
+
+    app.get("/stream", stream)
 
     with app.test() as client:
         resp = client.get("/stream")
@@ -65,13 +68,14 @@ def test_stream_sends_chunks_in_order_with_the_given_content_type() -> None:
 def test_a_cookie_value_that_could_inject_a_header_is_rejected() -> None:
     app = App()
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         try:
             c.cookie("sid", "x\r\nset-cookie: evil=1")
         except ValueError:
             return c.text("rejected")
         return c.text("accepted")
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")
@@ -83,7 +87,6 @@ def test_a_cookie_value_that_could_inject_a_header_is_rejected() -> None:
 def test_cookie_attributes_that_could_inject_a_header_or_attribute_are_rejected() -> None:
     app = App()
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         rejected = 0
         for kwargs in ({"path": "/; Domain=evil.test"}, {"domain": "a.test\r\nx: y"}):
@@ -93,6 +96,8 @@ def test_cookie_attributes_that_could_inject_a_header_or_attribute_are_rejected(
                 rejected += 1
         return c.text(str(rejected))
 
+    app.get("/", handler)
+
     with app.test() as client:
         assert client.get("/").text == "2"
 
@@ -100,12 +105,13 @@ def test_cookie_attributes_that_could_inject_a_header_or_attribute_are_rejected(
 def test_head_on_a_streaming_route_sends_headers_but_no_chunks() -> None:
     app = App()
 
-    @app.get("/stream")
     async def stream(c: Context) -> Response:
         async def chunks() -> AsyncIterator[str | bytes]:
             yield "data"
 
         return c.stream(chunks(), content_type="text/plain")
+
+    app.get("/stream", stream)
 
     with app.test() as client:
         resp = client.request("HEAD", "/stream")
@@ -117,16 +123,18 @@ def test_head_on_a_streaming_route_sends_headers_but_no_chunks() -> None:
 def test_redirect_sets_the_location_and_rejects_header_injection() -> None:
     app = App()
 
-    @app.get("/go")
     def go(c: Context) -> Response:
         return c.redirect("/there", 301)
 
-    @app.get("/bad")
+    app.get("/go", go)
+
     def bad(c: Context) -> Response:
         try:
             return c.redirect("/x\r\nset-cookie: a=b")
         except ValueError:
             return c.text("rejected")
+
+    app.get("/bad", bad)
 
     with app.test() as client:
         moved = client.get("/go")
@@ -139,17 +147,20 @@ def test_redirect_sets_the_location_and_rejects_header_injection() -> None:
 def file_app(root: Path) -> App:
     app = App()
 
-    @app.get("/report")
     def report(c: Context) -> Response:
         return c.file(root / "report.csv", filename="売上 2026.csv")
 
-    @app.get("/public/{name}")
+    app.get("/report", report)
+
     def public(c: Context) -> Response:
         return c.file(c.req.param("name"), root=root / "public")
 
-    @app.get("/raw")
+    app.get("/public/{name}", public)
+
     def raw(c: Context) -> Response:
         return c.file(root / "blob")
+
+    app.get("/raw", raw)
 
     return app
 

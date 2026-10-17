@@ -8,10 +8,11 @@ def _app(mw: Middleware) -> App:
     app = App()
     app.use("*", mw)
 
-    @app.get("/")
-    @app.get("/{lang}/page")
     def handler(c: Context) -> Response:
         return c.text(c.get(LANGUAGE))
+
+    app.get("/", handler)
+    app.get("/{lang}/page", handler)
 
     return app
 

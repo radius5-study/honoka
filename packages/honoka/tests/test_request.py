@@ -6,7 +6,6 @@ from honoka import App, Context, Response
 def echo_app() -> App:
     app = App()
 
-    @app.get("/query")
     def query(c: Context) -> Response:
         return c.json(
             {
@@ -17,23 +16,29 @@ def echo_app() -> App:
             }
         )
 
-    @app.get("/cookie")
+    app.get("/query", query)
+
     def cookie(c: Context) -> Response:
         return c.json({"a": c.req.cookie("a"), "b": c.req.cookie("b"), "z": c.req.cookie("z")})
 
-    @app.get("/accepts")
+    app.get("/cookie", cookie)
+
     def accepts(c: Context) -> Response:
         return c.json({"best": c.req.accepts(["application/json", "text/html"])})
 
-    @app.get("/client")
+    app.get("/accepts", accepts)
+
     def client_(c: Context) -> Response:
         return c.text(c.req.client)
 
-    @app.post("/echo")
+    app.get("/client", client_)
+
     async def echo(c: Context) -> Response:
         first = await c.req.body()
         second = await c.req.body()
         return c.json({"same": first == second, "json": await c.req.json()})
+
+    app.post("/echo", echo)
 
     return app
 
@@ -105,11 +110,12 @@ def test_query_parsing_agrees_with_the_standard_library_on_tricky_inputs() -> No
     app = App()
     seen: list[list[tuple[str, str]]] = []
 
-    @app.get("/q")
     def handler(c: Context) -> Response:
         names = {k for k, _ in parse_qsl(c.req.query_string, keep_blank_values=True)}
         seen.append([(n, v) for n in sorted(names) for v in c.req.queries(n)])
         return c.text(c.req.query("a") or "")
+
+    app.get("/q", handler)
 
     with app.test() as client:
         for raw in QUERY_CASES:

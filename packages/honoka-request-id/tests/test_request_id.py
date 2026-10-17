@@ -12,9 +12,10 @@ def test_a_request_id_is_generated_exposed_to_handlers_and_echoed() -> None:
     app = App()
     app.use("*", request_id())
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         return c.text(c.get(REQUEST_ID))
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/")
@@ -27,9 +28,10 @@ def test_a_well_formed_incoming_id_is_reused() -> None:
     app = App()
     app.use("*", request_id())
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         return c.text(c.get(REQUEST_ID))
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/", headers={"x-request-id": "trace-123.abc"})
@@ -42,9 +44,10 @@ def test_a_malformed_incoming_id_is_replaced(incoming: str) -> None:
     app = App()
     app.use("*", request_id())
 
-    @app.get("/")
     def handler(c: Context) -> Response:
         return c.text("")
+
+    app.get("/", handler)
 
     with app.test() as client:
         resp = client.get("/", headers={"x-request-id": incoming})

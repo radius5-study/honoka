@@ -10,9 +10,10 @@ from honoka import App, Context, Json, Response
 def test_sync_handler_responds_with_plain_text() -> None:
     app = App()
 
-    @app.get("/health")
     def health(c: Context) -> Response:
         return c.text("ok")
+
+    app.get("/health", health)
 
     with app.test() as client:
         resp = client.get("/health")
@@ -25,9 +26,10 @@ def test_sync_handler_responds_with_plain_text() -> None:
 def test_async_handler_reads_a_typed_path_parameter_and_returns_json() -> None:
     app = App()
 
-    @app.get("/users/{user_id}")
     async def get_user(c: Context) -> Json[dict[str, object]]:
         return c.json({"id": c.req.param("user_id", int), "name": "a"})
+
+    app.get("/users/{user_id}", get_user)
 
     with app.test() as client:
         resp = client.get("/users/42")
@@ -41,20 +43,23 @@ def test_def_handlers_leave_the_event_loop_thread_unless_inline() -> None:
     app = App()
     threads: dict[str, int] = {}
 
-    @app.get("/loop")
     async def on_loop(c: Context) -> Response:
         threads["loop"] = threading.get_ident()
         return c.text("")
 
-    @app.get("/threaded")
+    app.get("/loop", on_loop)
+
     def threaded(c: Context) -> Response:
         threads["threaded"] = threading.get_ident()
         return c.text("")
 
-    @app.get("/inline", inline=True)
+    app.get("/threaded", threaded)
+
     def inline(c: Context) -> Response:
         threads["inline"] = threading.get_ident()
         return c.text("")
+
+    app.get("/inline", inline, inline=True)
 
     with app.test() as client:
         for path in ("/loop", "/threaded", "/inline"):
@@ -67,9 +72,10 @@ def test_def_handlers_leave_the_event_loop_thread_unless_inline() -> None:
 def test_html_response_has_an_html_content_type() -> None:
     app = App()
 
-    @app.get("/")
     def index(c: Context) -> Response:
         return c.html("<p>hi</p>")
+
+    app.get("/", index)
 
     with app.test() as client:
         resp = client.get("/")
@@ -81,21 +87,25 @@ def test_html_response_has_an_html_content_type() -> None:
 def make_app() -> App:
     app = App()
 
-    @app.get("/items")
     def list_items(c: Context) -> Response:
         return c.text("list")
 
-    @app.post("/items")
+    app.get("/items", list_items)
+
     def create_item(c: Context) -> Response:
         return c.text("created", 201)
 
-    @app.get("/users/me")
+    app.post("/items", create_item)
+
     def me(c: Context) -> Response:
         return c.text("me")
 
-    @app.get("/users/{user_id}")
+    app.get("/users/me", me)
+
     def user(c: Context) -> Response:
         return c.text(f"user {c.req.param('user_id')}")
+
+    app.get("/users/{user_id}", user)
 
     return app
 
@@ -139,13 +149,15 @@ def test_a_static_route_wins_over_a_parameter_route() -> None:
 def test_matching_backtracks_from_a_dead_end_static_branch() -> None:
     app = App()
 
-    @app.get("/u/me/{x}/q")
     def first(c: Context) -> Response:
         return c.text("first")
 
-    @app.get("/u/{id}/y/z")
+    app.get("/u/me/{x}/q", first)
+
     def second(c: Context) -> Response:
         return c.text(f"second {c.req.param('id')}")
+
+    app.get("/u/{id}/y/z", second)
 
     with app.test() as client:
         assert client.get("/u/me/y/z").text == "second me"
@@ -154,27 +166,31 @@ def test_matching_backtracks_from_a_dead_end_static_branch() -> None:
 def test_registering_the_same_method_and_path_twice_is_rejected() -> None:
     app = App()
 
-    @app.get("/dup")
     def one(c: Context) -> Response:
         return c.text("1")
 
+    app.get("/dup", one)
+
     with pytest.raises(ValueError, match="duplicate route: GET /dup"):
 
-        @app.get("/dup")
         def two(c: Context) -> Response:
             return c.text("2")
+
+        app.get("/dup", two)
 
 
 def test_conflicting_parameter_names_fail_when_the_app_starts_not_on_a_request() -> None:
     app = App()
 
-    @app.get("/a/{x}")
     def first(c: Context) -> Response:
         return c.text("1")
 
-    @app.get("/a/{y}/b")
+    app.get("/a/{x}", first)
+
     def second(c: Context) -> Response:
         return c.text("2")
+
+    app.get("/a/{y}/b", second)
 
     with pytest.raises(ValueError, match="conflicting parameter names"), app.test():
         pass
