@@ -17,9 +17,9 @@ async def stamp(c: Context, call_next: Next) -> Response:
     return response
 
 
-def test_a_handler_given_directly_is_registered_and_the_app_is_returned() -> None:
+def test_a_handler_given_directly_is_registered() -> None:
     app = App()
-    assert app.get("/health", lambda c: c.text("ok")) is app
+    app.get("/health", lambda c: c.text("ok"))
     with app.test() as client:
         resp = client.get("/health")
     assert (resp.status, resp.text) == (200, "ok")
@@ -35,15 +35,16 @@ def test_middleware_before_the_handler_wraps_it() -> None:
     assert (closed.status, closed.text) == (403, "denied")
 
 
-def test_calls_chain_and_cover_other_verbs_on_and_all() -> None:
+def test_other_verbs_on_and_all_take_a_handler_too() -> None:
     app = App()
 
     async def create(c: Context) -> Response:
         return c.text("created", 201)
 
-    app.get("/a", lambda c: c.text("a")).post("/a", create).on(
-        ["PUT", "PATCH"], "/b", lambda c: c.text(c.req.method)
-    ).all("/c", lambda c: c.text("c"))
+    app.get("/a", lambda c: c.text("a"))
+    app.post("/a", create)
+    app.on(["PUT", "PATCH"], "/b", lambda c: c.text(c.req.method))
+    app.all("/c", lambda c: c.text("c"))
     with app.test() as client:
         seen = [
             client.get("/a").text,

@@ -205,7 +205,7 @@ class App:
         steps: tuple[Middleware | Handler, ...],
         inline: bool,
         meta: Mapping[str, object],
-    ) -> Self:
+    ) -> None:
         """Register `steps[-1]` as the handler and the steps before it as its middleware."""
         verbs = tuple(dict.fromkeys(m.upper() for m in methods))
         if not verbs:
@@ -227,7 +227,6 @@ class App:
         for pattern in patterns:
             for verb in verbs:
                 self._add(Route(verb, pattern, handler, middleware, inline, dict(meta)))
-        return self
 
     def _add(self, route: Route) -> None:
         pattern = route.pattern
@@ -268,13 +267,12 @@ class App:
             raise ValueError("mount needs a prefix other than '/': it would swallow every route")
         self._mounts.append((full, app))
 
-    def ws(self, path: str, handler: WebSocketHandler) -> Self:
+    def ws(self, path: str, handler: WebSocketHandler) -> None:
         """Register a WebSocket handler: `async def chat(ws: WebSocket)`. It must `accept()`."""
         pattern = self._base + path
         parse_pattern(pattern)
         self._websockets.append((pattern, handler))
         self._router = None
-        return self
 
     def on_startup[F: Hook](self, hook: F) -> F:
         self._startup.append(hook)
@@ -307,7 +305,7 @@ class App:
     @overload
     def query(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def query(
@@ -318,18 +316,18 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def query(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
+    ) -> None:
         """The HTTP `QUERY` method: a safe request that carries a body."""
-        return self._route(("QUERY",), path, steps, inline, meta)
+        self._route(("QUERY",), path, steps, inline, meta)
 
     @overload
     def get(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def get(
@@ -340,17 +338,17 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def get(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
-        return self._route(("GET",), path, steps, inline, meta)
+    ) -> None:
+        self._route(("GET",), path, steps, inline, meta)
 
     @overload
     def post(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def post(
@@ -361,17 +359,17 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def post(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
-        return self._route(("POST",), path, steps, inline, meta)
+    ) -> None:
+        self._route(("POST",), path, steps, inline, meta)
 
     @overload
     def put(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def put(
@@ -382,17 +380,17 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def put(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
-        return self._route(("PUT",), path, steps, inline, meta)
+    ) -> None:
+        self._route(("PUT",), path, steps, inline, meta)
 
     @overload
     def patch(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def patch(
@@ -403,17 +401,17 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def patch(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
-        return self._route(("PATCH",), path, steps, inline, meta)
+    ) -> None:
+        self._route(("PATCH",), path, steps, inline, meta)
 
     @overload
     def delete(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def delete(
@@ -424,17 +422,17 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def delete(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
-        return self._route(("DELETE",), path, steps, inline, meta)
+    ) -> None:
+        self._route(("DELETE",), path, steps, inline, meta)
 
     @overload
     def head(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def head(
@@ -445,17 +443,17 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def head(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
-        return self._route(("HEAD",), path, steps, inline, meta)
+    ) -> None:
+        self._route(("HEAD",), path, steps, inline, meta)
 
     @overload
     def options(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def options(
@@ -466,12 +464,12 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def options(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
-        return self._route(("OPTIONS",), path, steps, inline, meta)
+    ) -> None:
+        self._route(("OPTIONS",), path, steps, inline, meta)
 
     @overload
     def on(
@@ -483,7 +481,7 @@ class App:
         *,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def on(
@@ -495,7 +493,7 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def on(
         self,
@@ -504,16 +502,16 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self:
+    ) -> None:
         """Register one handler for several methods and paths: `app.on(["GET", "POST"], ["/form", "/ja/form"], handler)`.
         A method may be any token, e.g. `"PURGE"`."""
         verbs = (methods,) if isinstance(methods, str) else tuple(methods)
-        return self._route(verbs, path, steps, inline, meta)
+        self._route(verbs, path, steps, inline, meta)
 
     @overload
     def all(
         self, path: str, handler: Handler, /, *, inline: bool = False, **meta: object
-    ) -> Self: ...
+    ) -> None: ...
 
     @overload
     def all(
@@ -524,13 +522,13 @@ class App:
         *steps: Middleware | Handler,
         inline: bool = False,
         **meta: object,
-    ) -> Self: ...
+    ) -> None: ...
 
     def all(
         self, path: str, *steps: Middleware | Handler, inline: bool = False, **meta: object
-    ) -> Self:
+    ) -> None:
         """Register one handler for every common method (not `CONNECT` or `TRACE`)."""
-        return self._route(ALL_METHODS, path, steps, inline, meta)
+        self._route(ALL_METHODS, path, steps, inline, meta)
 
     def use(self, path: str, middleware: Middleware) -> None:
         """Wrap every route (and unmatched request) whose path matches `path`, e.g. `/api/*`."""

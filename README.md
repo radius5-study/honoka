@@ -31,8 +31,6 @@ app.post("/users", validator(json=NewUser), create_user)
 
 Registration is a call, as in Hono: `app.get(path, *middleware, handler)`. A `lambda` is fine for
 one expression; anything with `await` is a `def` passed by name. There are no route decorators.
-Each call returns the app, so they can chain, but put the chain in parentheses
-(`(app.get(...).post(...))`) or the formatter will not break it one call per line.
 
 ```sh
 granian --interface asgi app:app      # or uvicorn; host adapters such as Cloudflare Workers are separate packages
