@@ -143,4 +143,5 @@ def test_a_slow_subscriber_loses_its_oldest_events_instead_of_growing_forever() 
         for n in range(1, 151):
             bus.publish(event(n))
         assert queue.qsize() == 100
-        assert queue.get_nowait().id == 51
+        oldest = queue.get_nowait()
+        assert oldest is not None and oldest.id == 51

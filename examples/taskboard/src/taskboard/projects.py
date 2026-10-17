@@ -3,7 +3,7 @@
 from honoka import App, Context, HTTPError, Json, Response
 from honoka_msgspec import validator
 from taskboard import repo
-from taskboard.deps import DB, current_user_id
+from taskboard.deps import BUS, DB, current_user_id
 from taskboard.models import ErrorBody, ProjectIn, ProjectOut, ProjectPatch
 
 NOT_FOUND = {404: (ErrorBody, "No such project")}
@@ -49,6 +49,7 @@ async def delete_project(c: Context) -> Response:
     deleted = await c.get(DB).run(lambda conn: repo.delete_project(conn, owner, project_id))
     if not deleted:
         raise HTTPError(404, "project_not_found")
+    c.get(BUS).close(project_id)  # whoever is watching the project stops hearing from it
     return c.body(b"", 204)
 
 

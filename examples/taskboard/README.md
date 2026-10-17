@@ -47,6 +47,20 @@ curl -N $B/projects/1/events -H "authorization: Bearer $TOKEN"     # live; try a
 | `GET /projects/{id}/events` | SSE: `?live=false` replays and closes, `Last-Event-ID` resumes |
 | `GET /health`, `GET /ready` | liveness and database check |
 
+## Known trade-offs
+
+- **Registration says whether an email is taken** (`409 email_taken`), so it can be used to test
+  which addresses have accounts. Hiding it needs an email round trip (the same answer for every
+  address, the outcome sent by mail), which a sample without a mail service cannot show. Login does
+  not leak it: an unknown email takes the same time and answers the same way as a wrong password.
+- **Password guessing and sign-up floods are slowed, not stopped.** `taskboard.throttle` counts in
+  memory, per process: 5 failed logins per client and email, 10 registrations per client, each over
+  a minute (`Settings`), answered `429` with `Retry-After` before any password is hashed. With
+  several workers each counts for itself, and behind a reverse proxy every client is the proxy
+  until you read a forwarded address from a proxy you trust. A shared store is the next step.
+- **A stream ends** when its project is deleted and when the access token that opened it
+  expires; it re-checks nothing else while it is open.
+
 ## Reading guide
 
 - `app.py` is the whole assembly: the middleware order and why, the one place authentication is

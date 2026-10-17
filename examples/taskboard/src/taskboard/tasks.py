@@ -1,9 +1,11 @@
 """Tasks below a project, plus the live event stream of that project."""
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 
 import msgspec
+from honoka_jwt import JWT_PAYLOAD
 
 from honoka import App, Context, HTTPError, Json, Next, Response, SSEEvent, Stream
 from honoka_msgspec import validator
@@ -88,8 +90,10 @@ def _frame(event: Event) -> SSEEvent:
 
 
 async def _frames(
-    c: Context, project_id: int, last: int, live: bool, bus: EventBus
+    c: Context, project_id: int, last: int, live: bool, bus: EventBus, until: float | None
 ) -> AsyncIterator[SSEEvent]:
+    """Events of the project, ending when it is deleted or when `until` (the access token's
+    expiry, in epoch seconds) passes: ownership was checked once, when the stream opened."""
     db, heartbeat = c.get(DB), c.get(SETTINGS).sse_heartbeat
     since = last
     # Subscribe before replaying, so an event committed in between is not lost; the id check
@@ -100,11 +104,18 @@ async def _frames(
             last = event.id
             yield _frame(event)
         while live:
+            wait = heartbeat if until is None else min(heartbeat, until - time.time())
+            if wait <= 0:
+                return
             try:
-                event = await asyncio.wait_for(queue.get(), heartbeat)
+                event = await asyncio.wait_for(queue.get(), wait)
             except TimeoutError:
+                if until is not None and time.time() >= until:
+                    return
                 yield SSEEvent(data="{}", event="ping")  # keeps proxies from closing the stream
                 continue
+            if event is None:  # the project was deleted
+                return
             if event.id > last:
                 last = event.id
                 yield _frame(event)
@@ -116,7 +127,9 @@ async def follow(c: Context) -> Stream:
     project, query = c.get(PROJECT), c.req.valid(EventsQuery)
     header = c.req.header("last-event-id")
     last = int(header) if header is not None and header.isdecimal() else query.since
-    return c.sse(_frames(c, project.id, last, query.live, c.get(BUS)))
+    expires = c.get(JWT_PAYLOAD).get("exp")
+    until = float(expires) if isinstance(expires, int | float) else None
+    return c.sse(_frames(c, project.id, last, query.live, c.get(BUS), until))
 
 
 def router() -> App:
