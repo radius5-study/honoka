@@ -16,21 +16,22 @@ class NewUser(msgspec.Struct):
     name: str
 
 
-@app.get("/users/{id:int}")
 async def get_user(c: Context) -> Json[dict[str, object]]:
     return c.json({"id": int(c.req.param("id"))})
 
 
-@app.post("/users", validator(json=NewUser))
 async def create_user(c: Context) -> Json[NewUser]:
     return c.json(c.req.valid(NewUser))
+
+
+app.get("/health", lambda c: c.text("ok")).get("/users/{id:int}", get_user).post(
+    "/users", validator(json=NewUser), create_user
+)
 ```
 
-Hono's one-expression form works too, and calls chain:
-
-```python
-app.get("/health", lambda c: c.text("ok")).post("/users", validator(json=NewUser), create_user)
-```
+Registration is a call: `app.get(path, *middleware, handler)` returns the app, so calls chain as in
+Hono. A `lambda` is fine for one expression; anything with `await` is a `def` passed by name.
+The decorator form (`@app.get("/users")` on a `def`) works too.
 
 ```sh
 granian --interface asgi app:app      # or uvicorn; host adapters such as Cloudflare Workers are separate packages

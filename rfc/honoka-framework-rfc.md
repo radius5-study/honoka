@@ -98,22 +98,23 @@ from honoka import App, Context, HTTPError, Json, Response
 app = App()
 
 
-# Synchronous handler (runs in a worker thread; use inline=True to call it on the loop)
-@app.get("/health")
-def health(c: Context) -> Response:
-    return c.text("ok")
+# Registration is a call, as in Hono. A lambda is one expression; a synchronous handler runs
+# in a worker thread (use inline=True to call it on the loop)
+app.get("/health", lambda c: c.text("ok"))
 
 
 # Asynchronous handler. The return type is the response body type (used by OpenAPI)
-@app.get("/users/{user_id}")
 async def get_user(c: Context) -> Json[User]:
     user = await c.get(DB).fetch(c.req.param("user_id", int))  # param() parses and converts
     if user is None:
         raise HTTPError(404, "user_not_found")
     return c.json(user)  # c.json[T](obj: T) -> Json[T]
+
+
+app.get("/users/{user_id}", get_user)
 ```
 
-- Decorators return the function **as is, without wrapping it** (so that types are not broken)
+- Direct registration is the primary form; the decorator form is sugar for naming a function once. Decorators return the function **as is, without wrapping it** (so that types are not broken)
 - A handler can also be given directly, as in Hono: `app.get("/health", lambda c: c.text("ok"))`. A `lambda` is one expression with no `await`, so real handlers stay `def`/`async def` and are passed by name when registered this way
 - The handler signature is unified as `(c: Context) -> Response`; handlers that return a typed body annotate `Json[T]` (a subtype of `Response`)
 - `c.req.param(name, type)` raises a structured 400 when the conversion fails
@@ -230,11 +231,13 @@ class CreateUser(msgspec.Struct):
     age: Annotated[int, msgspec.Meta(ge=0)]
 
 
-@app.post("/users", validator(json=CreateUser, query=SearchQuery))
 async def create_user(c: Context) -> Json[User]:
     body = c.req.valid(CreateUser)  # CreateUser, already validated. Does not pass through unknown
     q = c.req.valid(SearchQuery)  # SearchQuery
     ...
+
+
+app.post("/users", validator(json=CreateUser, query=SearchQuery), create_user)
 ```
 
 Reading an unvalidated body is explicit and typed `object`: `await c.req.json()` (never `Any`).
