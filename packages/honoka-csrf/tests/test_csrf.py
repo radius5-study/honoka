@@ -1,5 +1,7 @@
 """csrf."""
 
+from collections.abc import Sequence
+
 from honoka_csrf import csrf
 
 from honoka import App, Context, Response
@@ -7,9 +9,9 @@ from honoka import App, Context, Response
 FORM = {"content-type": "application/x-www-form-urlencoded"}
 
 
-def csrf_app(**options: object) -> App:
+def csrf_app(origins: Sequence[str] = ()) -> App:
     app = App()
-    app.use("*", csrf(**options))  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    app.use("*", csrf(origins=origins))
 
     def transfer(c: Context) -> Response:
         return c.text("done")
@@ -57,3 +59,14 @@ def test_json_requests_and_safe_methods_are_not_checked() -> None:
     with csrf_app().test() as client:
         assert client.post("/transfer", json={"a": 1}).status == 200
         assert client.get("/page").status == 200
+
+
+def test_a_post_with_no_content_type_is_checked_like_a_form() -> None:
+    """A page can send a typeless POST (a no-cors fetch with a Blob) without a preflight, and a
+    handler may parse the body as JSON whatever its type says, so it counts as text/plain."""
+    cross = {"host": "app.test", "origin": "https://evil.test"}
+    with csrf_app().test() as client:
+        assert client.post("/transfer", headers=cross).status == 403
+        assert client.post("/transfer").status == 403  # no origin information at all
+        same = client.post("/transfer", headers={"host": "app.test", "origin": "https://app.test"})
+        assert same.status == 200
