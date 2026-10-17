@@ -101,6 +101,13 @@ path**, not by the text of a route pattern, so `use("/admin/*")` covers `/{secti
 path is `/admin/panel`. It also runs for WebSockets and mounted apps (a rejected WebSocket closes
 with 1008) and for unmatched requests.
 
+A middleware path is a route pattern and means what it means in routing: `use("/users/{id:int}/*")`
+covers what a route of that pattern would match, `strict=False` applies to it, and a pattern the
+router would refuse raises `ValueError` at `use`. The request path is canonicalised once before
+anything reads it: empty and `.` segments are dropped and `..` is resolved (never above the root),
+so `//admin/x` and `/a/../admin/x` are `/admin/x` for the router, the middleware and
+`c.req.path` alike. A single trailing slash is kept (`/users/` stays distinct under `strict`).
+
 ## Errors
 
 Raise `HTTPError(status, code, detail=None)` anywhere; the answer is `{"error": code}` (plus
