@@ -1,0 +1,16 @@
+# honoka-csrf
+
+Rejects cross-origin form submissions with `403`.
+
+```python
+from honoka_csrf import csrf
+
+app.use("*", csrf())
+app.use("*", csrf(origins=["https://admin.example"]))
+```
+
+- Checked: unsafe methods (not `GET`/`HEAD`/`OPTIONS`) whose content type is a form
+  (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`), the requests a
+  browser sends without a preflight. JSON APIs are not affected. This matches Hono.
+- Allowed: the same origin (by `Origin`, `Sec-Fetch-Site` or `Host`), and the extra `origins`.
+- The answer is `{"error": "csrf_rejected"}`.
