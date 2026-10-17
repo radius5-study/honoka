@@ -5,7 +5,7 @@ Lets an HTML form (which can only send GET and POST) reach `PUT`, `PATCH` and `D
 ```python
 from honoka_method_override import method_override
 
-asgi_app = method_override(app)                       # <input type="hidden" name="_method" value="DELETE">
+asgi_app = method_override(app)  # <input type="hidden" name="_method" value="DELETE">
 asgi_app = method_override(app, header="X-HTTP-Method-Override")
 asgi_app = method_override(app, query="_method", form="m", max_body=16 * 1024)
 ```

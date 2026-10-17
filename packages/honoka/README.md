@@ -55,9 +55,9 @@ When several match, the most specific wins: literal, then fixed converters, then
 
 ```python
 async def handler(c: Context):
-    c.header("x-trace", "1")                      # set (or remove with None, append=True to add)
-    c.cookie("seen", "1", max_age=3600)           # HttpOnly and SameSite=Lax by default
-    return c.json({"ok": True}, 201)              # also text(), html(), body(), redirect()
+    c.header("x-trace", "1")  # set (or remove with None, append=True to add)
+    c.cookie("seen", "1", max_age=3600)  # HttpOnly and SameSite=Lax by default
+    return c.json({"ok": True}, 201)  # also text(), html(), body(), redirect()
 ```
 
 - Responses: `json`, `text`, `html`, `body`, `redirect`, `file` (a path, optionally below a `root`
@@ -90,9 +90,9 @@ async def timing(c: Context, call_next: Next) -> Response:
     return response
 
 
-app.use("*", timing)              # every path
-app.use("/api/*", auth)           # a prefix and below, including routes registered later
-app.get("/admin", auth, admin)    # one route
+app.use("*", timing)  # every path
+app.use("/api/*", auth)  # a prefix and below, including routes registered later
+app.get("/admin", auth, admin)  # one route
 ```
 
 Middleware is `async def (c, call_next)`; it answers by returning a response without calling
@@ -107,11 +107,10 @@ Raise `HTTPError(status, code, detail=None)` anywhere; the answer is `{"error": 
 `detail`). Anything else becomes a logged `500 {"error": "internal_error"}`.
 
 ```python
-async def fail(c: Context) -> Response:
-    ...                           # the error is c.error
+async def fail(c: Context) -> Response: ...  # the error is c.error
 
 
-app.on_error(fail)                # a handler of one parameter answers
+app.on_error(fail)  # a handler of one parameter answers
 app.not_found(lambda c: c.json({"error": "no such page"}, 404))
 ```
 
@@ -150,7 +149,7 @@ app.ws("/chat/{room}", chat)
 with app.test() as client:
     resp = client.get("/users/1")
     assert (resp.status, resp.json()) == (200, {"id": 1})
-    client.post("/users", json={"name": "ann"})        # also form=, content=, headers=
+    client.post("/users", json={"name": "ann"})  # also form=, content=, headers=
     with client.websocket("/chat/a") as ws:
         ws.send_text("hi")
 ```

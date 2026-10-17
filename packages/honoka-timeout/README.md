@@ -5,8 +5,8 @@ Answers `504` when the wrapped layers take longer than a limit.
 ```python
 from honoka_timeout import timeout
 
-app.use("*", timeout(10))                       # every route
-app.get("/report", timeout(60), build_report)   # one route, a longer limit
+app.use("*", timeout(10))  # every route
+app.get("/report", timeout(60), build_report)  # one route, a longer limit
 ```
 
 - `timeout(seconds)`. The response is `{"error": "timeout"}` with status 504.

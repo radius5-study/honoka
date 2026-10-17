@@ -35,11 +35,11 @@ to write it to a file.
 app.post(
     "/users",
     validator(json=NewUser),
-    create_user,                       # async def create_user(c) -> Json[User]: ...
+    create_user,  # async def create_user(c) -> Json[User]: ...
     status=201,
     responses={409: (ErrorBody, "The email is already registered")},
 )
-app.get("/health", health, openapi=False)      # leave a route out
+app.get("/health", health, openapi=False)  # leave a route out
 ```
 
 `responses` maps a status to a type, or to `(type, description)`. HEAD and OPTIONS routes and

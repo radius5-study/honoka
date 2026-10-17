@@ -5,8 +5,11 @@ Serves files from a directory.
 ```python
 from honoka_serve_static import serve_static
 
-app.use("/static/*", serve_static(root="./public", rewrite_request_path=lambda p: p.removeprefix("/static")))
-app.use("*", serve_static(path="index.html"))            # one file for every request
+app.use(
+    "/static/*",
+    serve_static(root="./public", rewrite_request_path=lambda p: p.removeprefix("/static")),
+)
+app.use("*", serve_static(path="index.html"))  # one file for every request
 ```
 
 - `GET` and `HEAD` only. A miss, or any other method, goes on to the next handler, so routes

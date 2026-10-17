@@ -8,10 +8,13 @@ from honoka_basic_auth import USERNAME, BasicUser, basic_auth
 app.use("/admin/*", basic_auth(username="admin", password="s3cret"))
 app.use("/staff/*", basic_auth(users=[BasicUser("ann", "pw1"), BasicUser("bob", "pw2")]))
 
+
 async def check(username: str, password: str, c) -> bool:
     return await users.verify(username, password)
 
+
 app.use("/team/*", basic_auth(verify_user=check, realm="Team"))
+
 
 def who(c):
     return c.text(c.get(USERNAME))

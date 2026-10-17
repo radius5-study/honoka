@@ -7,6 +7,7 @@ from honoka_request_id import REQUEST_ID, request_id
 
 app.use("*", request_id())
 
+
 def whoami(c):
     return c.text(c.get(REQUEST_ID))
 ```

@@ -7,7 +7,7 @@ import logging
 from honoka_logger import logger
 
 logging.basicConfig(level=logging.INFO)
-app.use("*", logger())          # GET /users/1 200 1.4ms rid=3f9c...
+app.use("*", logger())  # GET /users/1 200 1.4ms rid=3f9c...
 ```
 
 - `logger(log=logging.getLogger("honoka.access"))` logs at `INFO` to that logger. Pass your own

@@ -9,8 +9,10 @@ from honoka_bearer_auth import Reply, bearer_auth
 app.use("/api/*", bearer_auth(token="a-long-random-token"))
 app.use("/api/*", bearer_auth(token=["token-1", "token-2"]))
 
+
 async def known(token: str, c) -> bool:
     return await api_keys.exists(token)
+
 
 app.use("/v2/*", bearer_auth(verify_token=known, invalid_token=Reply(message={"error": "bad key"})))
 ```

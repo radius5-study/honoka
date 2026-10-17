@@ -8,7 +8,7 @@ import msgspec
 from honoka import App, Context, Json
 from honoka_msgspec import MsgspecCodec, validator
 
-app = App(json_codec=MsgspecCodec())          # c.json() now encodes Structs directly
+app = App(json_codec=MsgspecCodec())  # c.json() now encodes Structs directly
 
 
 class NewUser(msgspec.Struct):
@@ -22,7 +22,7 @@ class Page(msgspec.Struct):
 
 
 async def create_user(c: Context) -> Json[NewUser]:
-    body = c.req.valid(NewUser)               # already validated and typed
+    body = c.req.valid(NewUser)  # already validated and typed
     return c.json(body, 201)
 
 

@@ -14,6 +14,7 @@ app.use(
     ),
 )
 
+
 def greeting(c):
     return c.text({"en": "Hello", "ja": "こんにちは"}.get(c.get(LANGUAGE), "Hello"))
 ```

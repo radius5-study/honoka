@@ -10,7 +10,9 @@ from honoka_bearer_auth import bearer_auth
 app.use("/admin/*", some(ip_restriction(allow_list=["10.0.0.0/8"]), bearer_auth(token="t0ken")))
 app.use("*", every(request_id(), logger()))
 app.use("*", except_("/health", bearer_auth(token="t0ken")))
-app.use("*", except_(["/public/*", lambda c: c.req.method == "OPTIONS"], bearer_auth(token="t0ken")))
+app.use(
+    "*", except_(["/public/*", lambda c: c.req.method == "OPTIONS"], bearer_auth(token="t0ken"))
+)
 ```
 
 - `some(*middlewares)` lets the request through when **any** of them passes (calls `next`). They

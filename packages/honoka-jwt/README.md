@@ -7,8 +7,10 @@ from honoka_jwt import JWT_PAYLOAD, jwt, sign, verify
 
 app.use("/api/*", jwt(secret=SECRET, iss="my-service"))
 
+
 def me(c):
     return c.json({"user": c.get(JWT_PAYLOAD)["sub"]})
+
 
 token = sign({"sub": "42", "iss": "my-service", "exp": int(time.time()) + 3600}, SECRET)
 claims = verify(token, SECRET, iss="my-service")
