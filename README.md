@@ -26,6 +26,12 @@ async def create_user(c: Context) -> Json[NewUser]:
     return c.json(c.req.valid(NewUser))
 ```
 
+Hono's one-expression form works too, and calls chain:
+
+```python
+app.get("/health", lambda c: c.text("ok")).post("/users", validator(json=NewUser), create_user)
+```
+
 ```sh
 granian --interface asgi app:app      # or uvicorn; host adapters such as Cloudflare Workers are separate packages
 honoka routes app                     # list routes

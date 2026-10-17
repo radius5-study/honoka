@@ -17,7 +17,7 @@ type Fallback = Handler | Middleware
 type Matches = Callable[[str, str], bool]
 
 
-def _takes_next(fn: Fallback) -> bool:
+def takes_next(fn: Fallback) -> bool:
     """A callable that wants `(c, next)` is a middleware step; `(c)` alone is a final handler."""
     positional = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     required = [
@@ -29,7 +29,7 @@ def _takes_next(fn: Fallback) -> bool:
 
 
 def _step(fn: Fallback) -> Step:
-    if _takes_next(fn):
+    if takes_next(fn):
         return cast(Step, fn)
     handler = cast(Handler, fn)
 
