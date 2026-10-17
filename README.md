@@ -24,14 +24,15 @@ async def create_user(c: Context) -> Json[NewUser]:
     return c.json(c.req.valid(NewUser))
 
 
-app.get("/health", lambda c: c.text("ok")).get("/users/{id:int}", get_user).post(
-    "/users", validator(json=NewUser), create_user
-)
+app.get("/health", lambda c: c.text("ok"))
+app.get("/users/{id:int}", get_user)
+app.post("/users", validator(json=NewUser), create_user)
 ```
 
-Registration is a call, as in Hono: `app.get(path, *middleware, handler)` returns the app, so calls
-chain. A `lambda` is fine for one expression; anything with `await` is a `def` passed by name.
-There are no route decorators.
+Registration is a call, as in Hono: `app.get(path, *middleware, handler)`. A `lambda` is fine for
+one expression; anything with `await` is a `def` passed by name. There are no route decorators.
+Each call returns the app, so they can chain, but put the chain in parentheses
+(`(app.get(...).post(...))`) or the formatter will not break it one call per line.
 
 ```sh
 granian --interface asgi app:app      # or uvicorn; host adapters such as Cloudflare Workers are separate packages
