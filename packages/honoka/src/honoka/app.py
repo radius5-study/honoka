@@ -4,6 +4,7 @@ import asyncio
 import copy
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from io import BufferedReader
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast, overload
 
@@ -39,6 +40,7 @@ type Hook = Callable[[], Awaitable[None] | None]
 # The router every App uses unless it is given `router=`; tests swap it to run on each router.
 DEFAULT_ROUTER: RouterFactory = SmartRouter
 
+FILE_CHUNK = 64 * 1024
 ALL_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 
 type GetPath = Callable[[HttpScope], str]
@@ -88,6 +90,10 @@ def _is_async(fn: object) -> bool:
         inspect.iscoroutinefunction(fn)
         or (callable(fn) and inspect.iscoroutinefunction(type(fn).__call__))
     )
+
+
+def _open_binary(path: str) -> BufferedReader:
+    return Path(path).open("rb")
 
 
 async def _run_hook(hook: Hook) -> None:
@@ -813,15 +819,18 @@ class App:
                 data = chunk.encode() if isinstance(chunk, str) else chunk
                 await send({"type": "http.response.body", "body": data, "more_body": True})
             await send({"type": "http.response.body", "body": b"", "more_body": False})
+        elif isinstance(response, FileResponse) and not head:
+            # ASGI has no portable "send this file": read it in pieces, off the event loop, so a
+            # large file is neither held in memory nor blocks other requests while it is read.
+            file = await asyncio.to_thread(_open_binary, response.path)
+            try:
+                while chunk := await asyncio.to_thread(file.read, FILE_CHUNK):
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+            finally:
+                file.close()
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
         else:
-            body = b""
-            if head or isinstance(response, Stream):
-                pass
-            elif isinstance(response, FileResponse):
-                # ASGI has no portable "send this file"; read it.
-                body = Path(response.path).read_bytes()
-            else:
-                body = response.body
+            body = b"" if head or isinstance(response, Stream | FileResponse) else response.body
             await send({"type": "http.response.body", "body": body})
 
     async def _unmatched(self, c: Context) -> Response:

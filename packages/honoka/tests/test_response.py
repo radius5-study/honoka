@@ -184,6 +184,15 @@ def test_a_file_is_sent_with_a_guessed_type_and_a_download_name(tmp_path: Path) 
     )
 
 
+def test_a_file_larger_than_one_chunk_arrives_whole_and_in_order(tmp_path: Path) -> None:
+    files = make_files(tmp_path)
+    content = bytes(range(256)) * 1000  # 256,000 bytes: several 64 KiB chunks
+    (files / "report.csv").write_bytes(content)
+    with file_app(files).test() as client:
+        resp = client.get("/report")
+    assert resp.body == content
+
+
 def test_an_unknown_extension_is_sent_as_octet_stream(tmp_path: Path) -> None:
     with file_app(make_files(tmp_path)).test() as client:
         resp = client.get("/raw")

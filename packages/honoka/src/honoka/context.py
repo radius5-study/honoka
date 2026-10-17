@@ -147,7 +147,7 @@ class Context:
         filename: str | None = None,
         status: int = 200,
     ) -> FileResponse:
-        """Send a file. The server streams it from disk; nothing is read into Python.
+        """Send a file, read from disk in pieces as it is sent.
 
         When `path` comes from the request, pass `root`: the file must then sit below that
         directory, so `../` and absolute paths answer 404 instead of leaking other files.
