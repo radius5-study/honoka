@@ -100,3 +100,14 @@ def test_except_skips_for_patterns_and_predicates() -> None:
     with build(exact).test() as client:
         assert client.get("/").status == 200
         assert client.get("/api/public/x").status == 401
+
+
+def test_except_patterns_follow_the_routing_rules_and_a_bad_one_fails_at_registration() -> None:
+    app = App()
+    app.use("*", except_("/users/{id:int}/public", needs("a")))
+    app.get("/users/{id}/public", lambda c: c.text("public"))
+    with app.test() as client:
+        assert client.get("/users/7/public").status == 200  # skipped: a route-style pattern
+        assert client.get("/users/x/public").status == 401  # {id:int} rejects "x", so not skipped
+    with pytest.raises(ValueError, match="pattern"):
+        except_("/users/{id", needs("a"))

@@ -20,10 +20,11 @@ from honoka_openapi import docs
 from taskboard import auth, projects, tasks
 from taskboard.auth import ISSUER
 from taskboard.db import Database
-from taskboard.deps import BUS, DB, SETTINGS
+from taskboard.deps import BUS, DB, LOGIN_THROTTLE, REGISTER_THROTTLE, SETTINGS
 from taskboard.events import EventBus
 from taskboard.models import EventsQuery
 from taskboard.settings import Settings
+from taskboard.throttle import Throttle
 
 log = logging.getLogger("taskboard")
 
@@ -67,6 +68,8 @@ def create_app(settings: Settings | None = None) -> App:
     app.provide(SETTINGS, settings)
     app.provide(DB, db)
     app.provide(BUS, EventBus())
+    app.provide(LOGIN_THROTTLE, Throttle(settings.login_attempts, settings.throttle_window))
+    app.provide(REGISTER_THROTTLE, Throttle(settings.register_attempts, settings.throttle_window))
     app.on_startup(db.open)
     app.on_shutdown(db.close)
 

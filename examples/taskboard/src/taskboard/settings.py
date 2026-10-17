@@ -17,6 +17,9 @@ class Settings:
     max_body: int = 64 * 1024
     request_timeout: float = 10.0
     sse_heartbeat: float = 15.0  # seconds of silence before a live stream sends a ping
+    login_attempts: int = 5  # failed logins per client and email before a wait
+    register_attempts: int = 10  # registrations per client before a wait
+    throttle_window: float = 60.0  # seconds the two limits above are counted over
 
     def __post_init__(self) -> None:
         if len(self.secret) < 32:

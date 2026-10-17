@@ -3,6 +3,8 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import pytest
+
 from honoka import App, Context, Response
 
 
@@ -142,6 +144,39 @@ def test_redirect_sets_the_location_and_rejects_header_injection() -> None:
 
     assert (moved.status, moved.headers["location"]) == (301, "/there")
     assert rejected.text == "rejected"
+
+
+@pytest.mark.parametrize(
+    "location", ["/\\evil.test", "/\t/evil.test", "/a\x00b", "/a\x7fb", "\n/x"]
+)
+def test_a_redirect_target_a_browser_could_read_as_another_origin_is_refused(
+    location: str,
+) -> None:
+    """A backslash reads as a slash and a tab is dropped by browsers, so `/\\host` and `/<tab>/host`
+    would become `//host`; control characters never belong in a Location."""
+    app = App()
+
+    def go(c: Context) -> Response:
+        return c.redirect(location)
+
+    app.get("/go", go)
+    with app.test() as client:
+        assert client.get("/go").status == 500
+
+
+def test_ordinary_redirect_targets_are_still_accepted() -> None:
+    app = App()
+    targets = ["/a?b=c#d", "https://example.com/x", "//cdn.example/x", "/%5Cescaped", "/日本語"]
+
+    for n, target in enumerate(targets):
+
+        def go(c: Context, target: str = target) -> Response:
+            return c.redirect(target)
+
+        app.get(f"/go{n}", go)
+    with app.test() as client:
+        got = [client.get(f"/go{n}").status for n in range(len(targets))]
+    assert got == [302] * len(targets)
 
 
 def file_app(root: Path) -> App:

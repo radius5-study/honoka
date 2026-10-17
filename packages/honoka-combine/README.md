@@ -23,5 +23,7 @@ app.use(
 - `every(*middlewares)` runs them in order; the first that raises or answers without calling
   `next` stops the chain.
 - `except_(condition, middleware)` skips `middleware` when the request matches. `condition` is a
-  path pattern (`/api/*` or an exact path), a function of the context, or a list of either.
+  path pattern (any route pattern, such as `/api/*`, `/users/{id:int}` or an exact path; a bad one
+  raises `ValueError` at registration), a function of the context, or a list of either. Patterns are
+  matched as `strict`, so `/health/` is not `/health` here and the middleware then runs.
   (`except` is a Python keyword.)

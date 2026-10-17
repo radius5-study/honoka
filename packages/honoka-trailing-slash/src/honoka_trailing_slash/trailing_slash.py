@@ -1,4 +1,8 @@
+from urllib.parse import quote
+
 from honoka import Context, Middleware, Next, Response
+
+_SAFE = "/:@!$&'()*+,;=-._~"
 
 
 def trim_trailing_slash() -> Middleware:
@@ -15,8 +19,9 @@ def trim_trailing_slash() -> Middleware:
         )
         if not redirectable:
             return response
-        # Collapse leading slashes: "//evil.test/" must not become a protocol-relative URL.
-        location = "/" + path.rstrip("/").lstrip("/")
+        # The path is decoded text. Re-encode it so a backslash or a tab cannot make the Location
+        # read as another origin, and collapse leading slashes so "//evil.test/" stays on this one.
+        location = "/" + quote(path.strip("/"), safe=_SAFE)
         if c.req.query_string:
             location += "?" + c.req.query_string
         return c.redirect(location, 301)

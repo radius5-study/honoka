@@ -1,14 +1,12 @@
 """The event stream: replay for reconnecting clients, and live delivery to open ones."""
 
 import asyncio
-import contextlib
 import json
 from datetime import UTC, datetime
 
-from taskboard_support import SignIn
+from taskboard_support import SignIn, ends_within, open_stream, sign_up
 
 from honoka import App
-from honoka.asgi import AsgiMessage, AsgiScope
 from honoka.testing import Client, asgi_call
 from taskboard.events import EventBus
 from taskboard.models import Event
@@ -62,42 +60,9 @@ def test_a_live_stream_delivers_changes_as_they_happen(app: App) -> None:
     async def scenario() -> list[dict[str, str]]:
         await app.start()
         try:
-            credentials = {"email": "ann@example.com", "password": "correct horse battery"}
-            payload = json.dumps(credentials).encode()
-            json_type = {"content-type": "application/json"}
-            await asgi_call(app, "POST", "/auth/register", headers=json_type, content=payload)
-            login = await asgi_call(app, "POST", "/auth/login", headers=json_type, content=payload)
-            token = json.loads(login.text)["access_token"]
-            auth = {"authorization": f"Bearer {token}", **json_type}
-            await asgi_call(app, "POST", "/projects", headers=auth, content=b'{"name": "P"}')
-
+            token, auth = await sign_up(app)
             received = bytearray()
-            hang_up = asyncio.Event()
-
-            asked = False
-
-            async def receive() -> AsgiMessage:
-                nonlocal asked
-                if not asked:
-                    asked = True
-                    return {"type": "http.request", "body": b"", "more_body": False}
-                await hang_up.wait()
-                return {"type": "http.disconnect"}
-
-            async def send(message: AsgiMessage) -> None:
-                chunk = message.get("body")
-                if isinstance(chunk, bytes):
-                    received.extend(chunk)
-
-            scope: AsgiScope = {
-                "type": "http",
-                "method": "GET",
-                "path": "/projects/1/events",
-                "query_string": b"",
-                "headers": [(b"authorization", f"Bearer {token}".encode())],
-            }
-            stream = asyncio.create_task(app(scope, receive, send))
-            await asyncio.sleep(0.05)  # let it subscribe
+            stream = await open_stream(app, token, received)
             for title in ("one", "two"):
                 content = json.dumps({"title": title}).encode()
                 await asgi_call(app, "POST", "/projects/1/tasks", headers=auth, content=content)
@@ -105,9 +70,7 @@ def test_a_live_stream_delivers_changes_as_they_happen(app: App) -> None:
                 if received.count(b"\nid: ") == 2:  # one `id:` line per event
                     break
                 await asyncio.sleep(0.02)
-            stream.cancel()  # the client went away
-            with contextlib.suppress(asyncio.CancelledError):
-                await stream
+            await ends_within(stream, 0)  # the client went away
             return frames(received.decode())
         finally:
             await app.stop()
@@ -143,4 +106,5 @@ def test_a_slow_subscriber_loses_its_oldest_events_instead_of_growing_forever() 
         for n in range(1, 151):
             bus.publish(event(n))
         assert queue.qsize() == 100
-        assert queue.get_nowait().id == 51
+        oldest = queue.get_nowait()
+        assert oldest is not None and oldest.id == 51

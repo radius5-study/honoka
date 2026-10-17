@@ -186,6 +186,8 @@ app.use("/admin/*", auth)
 - Middleware is async. Handlers can also be attached per route: `app.get("/users/{user_id}", auth, get_user)`
 
 - Path matching is completed in the core (pure Python in v0/v1; it may move to Rust, see 12.2), and the middleware chain of each route is composed once at registration
+- **One path, one set of rules.** The request path is canonicalised once at the entry (empty and `.` segments dropped, `..` resolved and never above the root, a single trailing slash kept), and routing, middleware, fallbacks, WebSockets, mounts and `c.req.path` all use that string, so a rule written for `/admin/x` cannot be dodged by `//admin/x` or `/a/../admin/x`. A middleware pattern (`app.use`, `on_error`, `not_found`, `except_`) means what a route of that pattern means (`path_matcher`), including `{id}`, converters, `re:`, `prefix*`, `*` and `strict=False`; a pattern the router would refuse fails at registration. Each middleware checks the request path itself: nothing is decided from the text of a route pattern, because a `re:` or `path` parameter can span several segments
+- `c.redirect` refuses control characters and backslashes (a browser reads `/\host` as `//host`); a middleware that redirects to a path it received re-encodes it
 
 ### 5.4 Error handling
 

@@ -23,10 +23,10 @@ from honoka.router import (
     RouterFactory,
     RouterLike,
     SmartRouter,
+    canonical_path,
     expand_optional,
-    normalize,
     parse_pattern,
-    split,
+    path_matcher,
 )
 from honoka.types import Handler, Middleware, Next
 from honoka.websocket import WebSocket, WebSocketDisconnect
@@ -102,48 +102,11 @@ async def _run_hook(hook: Hook) -> None:
         await result
 
 
-def _applicability(middleware: str, route: str) -> str:
-    """Whether a middleware pattern covers every path of a route (`always`), none (`never`), or
-    some, which only the request path can decide (`maybe`)."""
-    if middleware in ("*", "/*"):
-        return "always"
-    if _matches(middleware, route):
-        return "always"
-    if not route.startswith("/"):
-        return "maybe"
-    wanted = split(normalize(middleware))
-    wildcard = bool(wanted) and wanted[-1] == "*"
-    if wildcard:
-        wanted = wanted[:-1]
-    segments = parse_pattern(route)
-    for want, got in zip(wanted, segments, strict=False):
-        if got.kind == "literal" and got.text != want:
-            return "never"
-    if (
-        not wildcard
-        and len(segments) > len(wanted)
-        and all(seg.kind == "literal" for seg in segments)
-    ):
-        return "never"
-    return "maybe"
-
-
-def _matches(pattern: str, target: str) -> bool:
-    """Whether the middleware `pattern` (`/api/*`, `/admin`, `*`) applies to `target`."""
-    if pattern in ("*", "/*"):
-        return True
-    pattern, target = normalize(pattern), normalize(target)
-    wildcard = pattern.endswith("/*")
-    base = split(pattern[:-2] if wildcard else pattern)
-    parts = split(target)
-    return parts[: len(base)] == base if wildcard else parts == base
-
-
-def _gated(pattern: str, mw: Middleware) -> Middleware:
-    """`mw`, but only for requests whose path `pattern` covers."""
+def _gated(matches: Callable[[str], bool], mw: Middleware) -> Middleware:
+    """`mw`, but only for requests whose path `matches` covers."""
 
     async def gated(c: Context, call_next: Next) -> Response:
-        if _matches(pattern, c.req.path):
+        if matches(c.req.path):
             return await mw(c, call_next)
         return await call_next()
 
@@ -167,8 +130,8 @@ class App:
         self._router_factory = DEFAULT_ROUTER if router is None else router
         self._routes: list[Route] = []
         self._middlewares: list[tuple[str, Middleware]] = []
-        self._on_error = Fallbacks(_matches)
-        self._not_found = Fallbacks(_matches)
+        self._on_error = Fallbacks(self._covers)
+        self._not_found = Fallbacks(self._covers)
         self._provided: dict[object, object] = {}
         self._shared = _Shared()
         self._seen: set[tuple[str, str]] = set()
@@ -540,7 +503,9 @@ class App:
         """Wrap every route (and unmatched request) whose path matches `path`, e.g. `/api/*`."""
         if not _is_async(middleware):
             raise TypeError(f"middleware {middleware!r} must be an async function")
-        self._middlewares.append((self._scoped(path), middleware))
+        scoped = self._scoped(path)
+        path_matcher(scoped, self._strict)  # a pattern the router would refuse fails here
+        self._middlewares.append((scoped, middleware))
         self._router = None
 
     def _scoped(self, path: str) -> str:
@@ -653,16 +618,19 @@ class App:
 
         return run
 
+    def _covers(self, pattern: str, path: str) -> bool:
+        """Whether a middleware or fallback `pattern` covers the request `path`."""
+        return path_matcher(pattern, self._strict)(path)
+
     def _applicable(self, route: Route) -> list[Middleware]:
-        """The middleware that runs for `route`, each gated by the request path when the route's
-        pattern leaves open whether the middleware's pattern covers it."""
+        """The middleware that runs for `route`: each one checks the request path itself, because
+        what a pattern covers is only known for a path, never from the route's pattern text."""
         applicable: list[Middleware] = []
         for pattern, mw in self._middlewares:
-            fit = _applicability(pattern, route.pattern)
-            if fit == "always":
+            if pattern in ("*", "/*"):
                 applicable.append(mw)
-            elif fit == "maybe":
-                applicable.append(_gated(pattern, mw))
+            else:
+                applicable.append(_gated(path_matcher(pattern, self._strict), mw))
         applicable.extend(route.middleware)
         return applicable
 
@@ -728,7 +696,7 @@ class App:
         middleware that covers the prefix has let it through."""
         if self._router is None:
             self._compile()
-        path = cast(str, scope["path"])
+        path = canonical_path(cast(str, scope["path"]))
         for prefix, app, chain in self._shared.mounts:
             if path == prefix or path.startswith(prefix + "/"):
                 c, refused = await self._gate(scope, path, chain, receive)
@@ -742,8 +710,14 @@ class App:
                 inner = dict(scope)
                 inner["path"] = path[len(prefix) :] or "/"
                 raw = scope.get("raw_path")
-                if isinstance(raw, bytes) and raw.startswith(prefix.encode()):
+                if (
+                    path == scope["path"]
+                    and isinstance(raw, bytes)
+                    and raw.startswith(prefix.encode())
+                ):
                     inner["raw_path"] = raw[len(prefix) :] or b"/"
+                else:
+                    inner.pop("raw_path", None)  # the spelling changed; a stale raw path would lie
                 inner["root_path"] = cast(str, scope.get("root_path", "")) + prefix
                 await app(inner, receive, send)
                 return True
@@ -754,7 +728,7 @@ class App:
             self._compile()
         router = self._shared.ws_router
         path = (
-            cast(str, scope["path"])
+            canonical_path(cast(str, scope["path"]))
             if self._get_path is None
             else self._get_path(cast(HttpScope, {"method": "GET", **scope}))
         )
@@ -783,7 +757,7 @@ class App:
     async def _dispatch(self, scope: HttpScope, receive: Receive, send: Send) -> None:
         router = self._router or self._compile()
         method = scope["method"]
-        path = scope["path"] if self._get_path is None else self._get_path(scope)
+        path = canonical_path(scope["path"]) if self._get_path is None else self._get_path(scope)
         found = router.match(method, path)
         head = found is None and method == "HEAD"
         if head:
@@ -794,7 +768,7 @@ class App:
             c.route = found[0].pattern
             chain = found[0].chain
         else:
-            wrapping = [mw for pattern, mw in self._middlewares if _matches(pattern, path)]
+            wrapping = [mw for pattern, mw in self._middlewares if self._covers(pattern, path)]
             chain = self._compose(wrapping, self._unmatched)
         try:
             response = await chain(c)

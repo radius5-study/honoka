@@ -26,7 +26,8 @@ def csrf(*, origins: Sequence[str] = ()) -> Middleware:
     allowed = frozenset(origins)
 
     async def middleware(c: Context, call_next: Next) -> Response:
-        content_type = (c.req.header("content-type") or "").split(";")[0].strip().lower()
+        # No Content-Type counts as text/plain, as in Hono: a page can send one without a preflight.
+        content_type = (c.req.header("content-type") or "text/plain").split(";")[0].strip().lower()
         if (
             c.req.method not in _SAFE
             and content_type in _FORM_TYPES

@@ -17,6 +17,7 @@ All routers must give identical answers; the routing tests run against each of t
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Protocol, cast, override
 
@@ -102,6 +103,24 @@ def _context_dependent(regex: str) -> str | None:
 
 def split(path: str) -> list[str]:
     return path.split("/")[1:]
+
+
+def canonical_path(path: str) -> str:
+    """The path the router, the middleware gate and handlers all see: empty and `.` segments are
+    dropped and `..` removes the segment before it (never climbing above the root); a trailing
+    slash survives as a single one. `//admin/x` and `/a/../admin/x` are `/admin/x`, so a rule
+    written for one spelling cannot be dodged by another."""
+    if "//" not in path and "/." not in path:
+        return path
+    kept: list[str] = []
+    for segment in path.split("/"):
+        if segment == "..":
+            if kept:
+                kept.pop()
+        elif segment not in ("", "."):
+            kept.append(segment)
+    trailing = path.endswith(("/", "/.", "/.."))
+    return "/" + "/".join(kept) + ("/" if kept and trailing else "")
 
 
 def _split_pattern(pattern: str) -> list[str]:
@@ -587,3 +606,22 @@ class SmartRouter:
 
     def allowed_methods(self, path: str) -> list[str]:
         return self._active().allowed_methods(path)
+
+
+async def _never_called(c: Context) -> Response:
+    raise AssertionError("a path matcher never runs its handler")
+
+
+@lru_cache(maxsize=512)
+def path_matcher(pattern: str, strict: bool = True) -> Callable[[str], bool]:
+    """Whether a request path is covered by `pattern`, by the rules routing uses, so a middleware
+    written for `/users/{id}/*` covers what a route of that pattern would match and nothing else.
+    `*` and `/*` cover everything. A pattern the router refuses raises `ValueError` here."""
+    if pattern in ("*", "/*"):
+        return lambda path: True
+    router = SmartRouter(strict=strict)
+    for variant in expand_optional(pattern):
+        parse_pattern(variant)  # a bad pattern fails here, with its own message
+        router.add(Route("COVER", variant, _never_called, (), False, {}))
+    router.compile()
+    return lambda path: router.match("COVER", path) is not None
