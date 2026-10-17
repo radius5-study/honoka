@@ -2,6 +2,7 @@
 members = [
     "packages/*",
     "benchmarks",
+    "examples/*",
 ]
 
 [tool.ruff]
@@ -23,17 +24,17 @@ exclude = ["packages/*/tests/typing/bad.py"]
 
 [tool.pyrefly]
 project-excludes = ["**/.venv/**", "packages/*/tests/typing/bad.py"]
-search-path = ["packages/honoka-cli/tests"]
+search-path = ["packages/honoka-cli/tests", "examples/taskboard/tests"]
 
 [tool.pytest.ini_options]
-testpaths = ["packages", "benchmarks"]
+testpaths = ["packages", "benchmarks", "examples"]
 addopts = "-ra"
 
 [tool.ruff.lint]
 extend-select = ["ANN"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["honoka", "honoka_msgspec", "honoka_middleware", "honoka_openapi"]
+known-first-party = ["honoka", "honoka_msgspec", "honoka_middleware", "honoka_openapi", "taskboard"]
 
 # BlackSheep and Robyn ship untyped route decorators, so the strictest "decorator returns Any" rule
 # fires on every route of their benchmark apps. Relax that one rule for those two files only.

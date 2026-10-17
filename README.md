@@ -72,6 +72,11 @@ reads `tool.uv.sources` for the packages your own project names.
 - content: `-etag`, `-compress`, `-serve-static`
 - composition: `-combine` (`some`, `every`, `except_`)
 
+## Example
+
+[examples/taskboard](examples/taskboard) is a complete API server: accounts with JWT, per-user
+projects and tasks on SQLite, validation, SSE with replay, OpenAPI docs and the usual middleware.
+
 ## Development
 
 ```sh

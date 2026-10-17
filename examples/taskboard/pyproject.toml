@@ -1,0 +1,44 @@
+[project]
+name = "taskboard"
+version = "0.1.0"
+description = "A task board API built on honoka: JWT auth, SQLite, validation, SSE and OpenAPI"
+authors = [
+    { name = "L4Ph", email = "me@l4ph.moe" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "granian>=2.8.4",
+    "honoka",
+    "honoka-body-limit",
+    "honoka-compress",
+    "honoka-cors",
+    "honoka-etag",
+    "honoka-jwt",
+    "honoka-logger",
+    "honoka-msgspec",
+    "honoka-openapi",
+    "honoka-request-id",
+    "honoka-secure-headers",
+    "honoka-timeout",
+    "honoka-timing",
+    "msgspec>=0.22.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+honoka = { workspace = true }
+honoka-body-limit = { workspace = true }
+honoka-compress = { workspace = true }
+honoka-cors = { workspace = true }
+honoka-etag = { workspace = true }
+honoka-jwt = { workspace = true }
+honoka-logger = { workspace = true }
+honoka-msgspec = { workspace = true }
+honoka-openapi = { workspace = true }
+honoka-request-id = { workspace = true }
+honoka-secure-headers = { workspace = true }
+honoka-timeout = { workspace = true }
+honoka-timing = { workspace = true }
