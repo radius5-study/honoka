@@ -104,6 +104,24 @@ def split(path: str) -> list[str]:
     return path.split("/")[1:]
 
 
+def canonical_path(path: str) -> str:
+    """The path the router, the middleware gate and handlers all see: empty and `.` segments are
+    dropped and `..` removes the segment before it (never climbing above the root); a trailing
+    slash survives as a single one. `//admin/x` and `/a/../admin/x` are `/admin/x`, so a rule
+    written for one spelling cannot be dodged by another."""
+    if "//" not in path and "/." not in path:
+        return path
+    kept: list[str] = []
+    for segment in path.split("/"):
+        if segment == "..":
+            if kept:
+                kept.pop()
+        elif segment not in ("", "."):
+            kept.append(segment)
+    trailing = path.endswith(("/", "/.", "/.."))
+    return "/" + "/".join(kept) + ("/" if kept and trailing else "")
+
+
 def _split_pattern(pattern: str) -> list[str]:
     """Split a route pattern on `/`, except inside `{...}` (a regex may contain a slash)."""
     parts: list[str] = []

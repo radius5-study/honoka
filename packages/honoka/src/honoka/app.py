@@ -23,6 +23,7 @@ from honoka.router import (
     RouterFactory,
     RouterLike,
     SmartRouter,
+    canonical_path,
     expand_optional,
     normalize,
     parse_pattern,
@@ -728,7 +729,7 @@ class App:
         middleware that covers the prefix has let it through."""
         if self._router is None:
             self._compile()
-        path = cast(str, scope["path"])
+        path = canonical_path(cast(str, scope["path"]))
         for prefix, app, chain in self._shared.mounts:
             if path == prefix or path.startswith(prefix + "/"):
                 c, refused = await self._gate(scope, path, chain, receive)
@@ -742,8 +743,14 @@ class App:
                 inner = dict(scope)
                 inner["path"] = path[len(prefix) :] or "/"
                 raw = scope.get("raw_path")
-                if isinstance(raw, bytes) and raw.startswith(prefix.encode()):
+                if (
+                    path == scope["path"]
+                    and isinstance(raw, bytes)
+                    and raw.startswith(prefix.encode())
+                ):
                     inner["raw_path"] = raw[len(prefix) :] or b"/"
+                else:
+                    inner.pop("raw_path", None)  # the spelling changed; a stale raw path would lie
                 inner["root_path"] = cast(str, scope.get("root_path", "")) + prefix
                 await app(inner, receive, send)
                 return True
@@ -754,7 +761,7 @@ class App:
             self._compile()
         router = self._shared.ws_router
         path = (
-            cast(str, scope["path"])
+            canonical_path(cast(str, scope["path"]))
             if self._get_path is None
             else self._get_path(cast(HttpScope, {"method": "GET", **scope}))
         )
@@ -783,7 +790,7 @@ class App:
     async def _dispatch(self, scope: HttpScope, receive: Receive, send: Send) -> None:
         router = self._router or self._compile()
         method = scope["method"]
-        path = scope["path"] if self._get_path is None else self._get_path(scope)
+        path = canonical_path(scope["path"]) if self._get_path is None else self._get_path(scope)
         found = router.match(method, path)
         head = found is None and method == "HEAD"
         if head:
