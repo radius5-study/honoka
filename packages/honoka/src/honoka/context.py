@@ -173,8 +173,10 @@ class Context:
         return FileResponse(str(target), status, headers)
 
     def redirect(self, location: str, status: int = 302) -> Response:
-        if "\r" in location or "\n" in location:
-            raise ValueError("redirect location must not contain line breaks")
+        if any(ord(ch) < 0x20 or ch in "\x7f\\" for ch in location):
+            # A line break splits the header. A backslash reads as a slash and a tab is dropped by
+            # browsers, so "/\\host" and "/<tab>/host" would be taken for "//host": another origin.
+            raise ValueError("redirect location must not contain control characters or backslashes")
         return Response(b"", status, [("location", location)])
 
     def stream(

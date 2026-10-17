@@ -49,3 +49,19 @@ def test_leading_slashes_are_collapsed_so_the_redirect_stays_on_this_site() -> N
     with trailing_app().test() as client:
         resp = client.get("//evil.test/")
     assert resp.headers["location"] == "/evil.test"
+
+
+def test_a_backslash_or_tab_in_the_path_cannot_make_the_redirect_leave_this_site() -> None:
+    """Browsers read `/\\evil.test` as `//evil.test` and drop tabs, so the target is re-encoded."""
+    with trailing_app().test() as client:
+        slash = client.get("/\\evil.test/")
+        tab = client.get("/\t/evil.test/")
+    assert slash.headers["location"] == "/%5Cevil.test"
+    assert tab.headers["location"] == "/%09/evil.test"
+    assert (slash.status, tab.status) == (301, 301)
+
+
+def test_non_ascii_paths_are_percent_encoded_in_the_location() -> None:
+    with trailing_app().test() as client:
+        resp = client.get("/日本語/")
+    assert resp.headers["location"] == "/%E6%97%A5%E6%9C%AC%E8%AA%9E"
