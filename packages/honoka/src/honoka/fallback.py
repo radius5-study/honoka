@@ -61,6 +61,7 @@ class Fallbacks:
         steps = tuple(_step(a) for a in args if not isinstance(a, str))
         if not steps:
             raise TypeError("expected at least one handler")
+        self._matches(pattern, "/")  # a pattern the router would refuse fails here, not later
         self._items.append(_Registration(pattern, steps, 0))
 
     def mount(self, prefix: str, sub: "Fallbacks") -> None:

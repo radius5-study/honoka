@@ -1,7 +1,7 @@
 from collections.abc import Callable, Sequence
 
 from honoka import Context, HTTPError, Middleware, Next, Response
-from honoka.router import normalize, split
+from honoka.router import path_matcher
 
 type Condition = str | Callable[[Context], bool]
 
@@ -59,26 +59,28 @@ def every(*middlewares: Middleware) -> Middleware:
     return middleware
 
 
-def _matches(pattern: str, target: str) -> bool:
-    # The rule of `app.use` patterns: `*`, `/api/*` (the prefix and below) or an exact path.
-    if pattern in ("*", "/*"):
-        return True
-    pattern, target = normalize(pattern), normalize(target)
-    wildcard = pattern.endswith("/*")
-    base = split(pattern[:-2] if wildcard else pattern)
-    parts = split(target)
-    return parts[: len(base)] == base if wildcard else parts == base
+def _predicate(condition: Condition) -> Callable[[Context], bool]:
+    if isinstance(condition, str):
+        covers = path_matcher(condition)
+        return lambda c: covers(c.req.path)
+    return condition
 
 
 def except_(condition: Condition | Sequence[Condition], middleware: Middleware) -> Middleware:
     """Run `middleware` unless the request matches `condition`: a path pattern (`/api/*`, exact
     paths), a predicate `(c) -> bool`, or a list of either. (`except` is a Python keyword.)"""
-    conditions = [condition] if isinstance(condition, str) or callable(condition) else condition
+    given: Sequence[Condition]
+    if isinstance(condition, str) or not isinstance(condition, Sequence):
+        given = [condition]
+    else:
+        given = condition
+    # Patterns are compiled now, so a bad one fails at registration. They follow the routing
+    # rules with `strict` on: `/health/` is not `/health` here and the middleware then runs,
+    # which is the safe side.
+    conditions = [_predicate(cond) for cond in given]
 
     def skipped(c: Context) -> bool:
-        return any(
-            _matches(cond, c.req.path) if isinstance(cond, str) else cond(c) for cond in conditions
-        )
+        return any(cond(c) for cond in conditions)
 
     async def wrapper(c: Context, call_next: Next) -> Response:
         if skipped(c):

@@ -17,6 +17,7 @@ All routers must give identical answers; the routing tests run against each of t
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Protocol, cast, override
 
@@ -605,3 +606,22 @@ class SmartRouter:
 
     def allowed_methods(self, path: str) -> list[str]:
         return self._active().allowed_methods(path)
+
+
+async def _never_called(c: Context) -> Response:
+    raise AssertionError("a path matcher never runs its handler")
+
+
+@lru_cache(maxsize=512)
+def path_matcher(pattern: str, strict: bool = True) -> Callable[[str], bool]:
+    """Whether a request path is covered by `pattern`, by the rules routing uses, so a middleware
+    written for `/users/{id}/*` covers what a route of that pattern would match and nothing else.
+    `*` and `/*` cover everything. A pattern the router refuses raises `ValueError` here."""
+    if pattern in ("*", "/*"):
+        return lambda path: True
+    router = SmartRouter(strict=strict)
+    for variant in expand_optional(pattern):
+        parse_pattern(variant)  # a bad pattern fails here, with its own message
+        router.add(Route("COVER", variant, _never_called, (), False, {}))
+    router.compile()
+    return lambda path: router.match("COVER", path) is not None
